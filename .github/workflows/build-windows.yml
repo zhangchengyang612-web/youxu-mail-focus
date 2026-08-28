@@ -1,7 +1,6 @@
 name: Build Windows
 
 on:
-  workflow_dispatch:
   push:
     tags:
       - 'v*'
@@ -34,16 +33,35 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Build and release
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build Tauri app
+        run: npm run tauri build
+
+      - name: Prepare installer
+        shell: pwsh
+        run: |
+          $dir = "src-tauri\target\release\bundle\nsis"
+          $exe = Get-ChildItem -Path "$dir\*x64-setup.exe" | Select-Object -First 1
+          if (-not $exe) { Write-Error "NSIS installer not found"; exit 1 }
+          $version = node -p "require('./package.json').version"
+          $newName = "邮序_${version}_x64-setup.exe"
+          Rename-Item -Path $exe.FullName -NewName $newName
+          $final = Join-Path $dir $newName
+          (Get-FileHash -Path $final -Algorithm SHA256).Hash.ToLower() | Out-File -Encoding ascii "$final.sha256"
+          Get-ChildItem $dir | ForEach-Object { Write-Host $_.Name }
+
+      - name: Create release and upload
+        uses: softprops/action-gh-release@v2
         with:
-          tagName: v__VERSION__
-          releaseName: '邮序 v__VERSION__'
-          releaseBody: |
+          tag_name: ${{ github.ref_name }}
+          name: 邮序 ${{ github.ref_name }}
+          files: |
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/nsis/*.sha256
+          prerelease: true
+          generate_release_notes: false
+          body: |
             未签名的 Windows 安装包（.exe），仅供内部测试。
             首次运行若出现 SmartScreen 提示，请点击「更多信息」→「仍要运行」。
             说明：Windows 版邮件读取、分类、iSpace DDL 同步可用；「创建系统提醒」需要配置 Microsoft Entra Client ID 后才能使用。
-          releaseDraft: false
-          prerelease: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
