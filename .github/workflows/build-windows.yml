@@ -43,7 +43,7 @@ jobs:
           $exe = Get-ChildItem -Path "$dir\*x64-setup.exe" | Select-Object -First 1
           if (-not $exe) { Write-Error "NSIS installer not found"; exit 1 }
           $version = node -p "require('./package.json').version"
-          $newName = "邮序_${version}_x64-setup.exe"
+          $newName = "YouXu_${version}_x64-setup.exe"
           Rename-Item -Path $exe.FullName -NewName $newName
           $final = Join-Path $dir $newName
           (Get-FileHash -Path $final -Algorithm SHA256).Hash.ToLower() | Out-File -Encoding ascii "$final.sha256"
