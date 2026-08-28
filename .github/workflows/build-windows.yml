@@ -1,0 +1,46 @@
+name: Build Windows
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-windows:
+    name: Build Windows installer (.exe)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build and release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: v__VERSION__
+          releaseName: '邮序 v__VERSION__'
+          releaseBody: |
+            未签名的 Windows 安装包（.exe），仅供内部测试。
+            首次运行若出现 SmartScreen 提示，请点击「更多信息」→「仍要运行」。
+            说明：Windows 版邮件读取、分类、iSpace DDL 同步可用；「创建系统提醒」需要配置 Microsoft Entra Client ID 后才能使用。
+          releaseDraft: false
+          prerelease: true
