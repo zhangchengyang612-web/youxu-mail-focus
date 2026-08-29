@@ -17,6 +17,9 @@ pub fn open(path: &Path) -> Result<Connection, String> {
       CREATE TABLE IF NOT EXISTS reminder_links (
         source_mail_id TEXT PRIMARY KEY, platform TEXT NOT NULL, external_id TEXT NOT NULL,
         created_at TEXT NOT NULL, status TEXT NOT NULL, FOREIGN KEY(source_mail_id) REFERENCES mails(id) ON DELETE CASCADE);
+      CREATE TABLE IF NOT EXISTS system_reminder_links (
+        source_id TEXT PRIMARY KEY, platform TEXT NOT NULL, external_id TEXT NOT NULL,
+        created_at TEXT NOT NULL, status TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS sync_state (
         folder TEXT PRIMARY KEY, last_uid INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS assignments (
@@ -135,6 +138,22 @@ pub fn reminder_exists(db: &Connection, mail_id: &str) -> Result<bool, String> {
     Ok(exists.is_some())
 }
 
+pub fn system_reminder_exists(db: &Connection, source_id: &str) -> Result<bool, String> {
+    let exists: Option<String> = db.query_row("SELECT external_id FROM system_reminder_links WHERE source_id=?1 AND status='created'", [source_id], |row| row.get(0)).optional().map_err(|e| e.to_string())?;
+    Ok(exists.is_some())
+}
+
+pub fn save_system_reminder_link(db: &Connection, source_id: &str, platform: &str, external_id: &str) -> Result<(), String> {
+    db.execute("INSERT INTO system_reminder_links(source_id,platform,external_id,created_at,status) VALUES(?1,?2,?3,datetime('now'),'created')", params![source_id,platform,external_id]).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub fn list_system_reminder_sources(db: &Connection) -> Result<Vec<String>, String> {
+    let mut statement = db.prepare("SELECT source_id FROM system_reminder_links WHERE status='created' ORDER BY created_at DESC").map_err(|e| e.to_string())?;
+    let rows = statement.query_map([], |row| row.get(0)).map_err(|e| e.to_string())?;
+    rows.collect::<Result<Vec<_>,_>>().map_err(|e| e.to_string())
+}
+
 pub fn save_created_reminder(db: &mut Connection, draft: &ReminderDraft, platform: &str, external_id: &str) -> Result<(), String> {
     let transaction = db.transaction().map_err(|e| e.to_string())?;
     transaction.execute("INSERT INTO reminder_links(source_mail_id,platform,external_id,created_at,status) VALUES(?1,?2,?3,datetime('now'),'created')", params![draft.source_mail_id,platform,external_id]).map_err(|e| e.to_string())?;
@@ -177,7 +196,7 @@ pub fn delete_personal_event(db: &Connection, id: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub fn clear(db: &Connection) -> Result<(), String> { db.execute_batch("DELETE FROM reminder_links; DELETE FROM mails; DELETE FROM rules; DELETE FROM assignments; DELETE FROM calendar_events; DELETE FROM settings;").map_err(|e| e.to_string()) }
+pub fn clear(db: &Connection) -> Result<(), String> { db.execute_batch("DELETE FROM reminder_links; DELETE FROM system_reminder_links; DELETE FROM mails; DELETE FROM rules; DELETE FROM assignments; DELETE FROM calendar_events; DELETE FROM settings;").map_err(|e| e.to_string()) }
 
 #[cfg(test)]
 mod tests {
@@ -197,6 +216,10 @@ mod tests {
         assert_eq!(save_personal_event(&db, &updated).expect("update event").title, "复习课程（更新）");
         delete_personal_event(&db, &created.id).expect("delete personal event");
         assert!(list_calendar_events(&db).expect("list after delete").is_empty());
+        assert!(!system_reminder_exists(&db, "personal:test").expect("check system reminder"));
+        save_system_reminder_link(&db, "personal:test", "apple-reminders", "external-1").expect("save system reminder link");
+        assert!(system_reminder_exists(&db, "personal:test").expect("check saved system reminder"));
+        assert_eq!(list_system_reminder_sources(&db).expect("list sources"), vec!["personal:test"]);
         drop(db);
         let _ = std::fs::remove_file(path);
     }

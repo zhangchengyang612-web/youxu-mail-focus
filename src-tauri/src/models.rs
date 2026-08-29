@@ -65,3 +65,13 @@ pub struct PersonalReminderInput {
     pub starts_at: String,
     pub priority: String,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SystemReminderInput {
+    pub source_id: String,
+    pub title: String,
+    pub notes: String,
+    pub due_at: String,
+    pub priority: String,
+}

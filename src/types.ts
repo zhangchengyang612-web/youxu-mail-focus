@@ -75,3 +75,11 @@ export interface PersonalReminderInput {
   startsAt: string;
   priority: "low" | "normal" | "high";
 }
+
+export interface SystemReminderInput {
+  sourceId: string;
+  title: string;
+  notes: string;
+  dueAt: string;
+  priority: "low" | "normal" | "high";
+}

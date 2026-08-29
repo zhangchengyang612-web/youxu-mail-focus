@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { demoMails } from "./demo";
-import type { AssignmentDeadline, CalendarEvent, Category, ClassificationRule, MailMessage, MailSettings, PersonalReminderInput, ReminderDraft } from "./types";
+import type { AssignmentDeadline, CalendarEvent, Category, ClassificationRule, MailMessage, MailSettings, PersonalReminderInput, ReminderDraft, SystemReminderInput } from "./types";
 
 const isTauri = () => "__TAURI_INTERNALS__" in window;
 
@@ -48,6 +48,17 @@ export const api = {
   async deletePersonalReminder(eventId: string): Promise<void> {
     if (isTauri()) return invoke("delete_personal_reminder", { eventId });
     localStorage.setItem("calendar-events", JSON.stringify((await this.listCalendarEvents()).filter((item) => item.id !== eventId || item.kind !== "personal")));
+  },
+  async createSystemReminder(input: SystemReminderInput): Promise<string> {
+    if (isTauri()) return invoke("create_system_reminder", { input });
+    const sources = await this.listSystemReminderSources();
+    if (sources.includes(input.sourceId)) throw new Error("这个事项已经加入过电脑提醒");
+    localStorage.setItem("system-reminder-sources", JSON.stringify([...sources, input.sourceId]));
+    return `demo-system-${Date.now()}`;
+  },
+  async listSystemReminderSources(): Promise<string[]> {
+    if (isTauri()) return invoke("list_system_reminder_sources");
+    try { return JSON.parse(localStorage.getItem("system-reminder-sources") ?? "[]"); } catch { return []; }
   },
   async clearLocalData(): Promise<void> {
     if (isTauri()) await invoke("clear_local_data");

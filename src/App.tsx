@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Bell, BookOpen, Building2, CalendarClock, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, Clock3, Copy, Globe2, GraduationCap, Inbox, ListTodo, Menu, MoreHorizontal, PartyPopper, Pencil, Plus, RefreshCw, Search, Settings, ShieldCheck, SlidersHorizontal, Sparkles, Trash2, UserRound, X } from "lucide-react";
 import { api } from "./api";
 import { buildMonthGrid, createReminderDraft, localDateKey, summarizeMail } from "./domain";
-import { categories, type AssignmentDeadline, type CalendarEvent, type Category, type ClassificationRule, type MailMessage, type MailSettings, type PersonalReminderInput, type ReminderDraft } from "./types";
+import { categories, type AssignmentDeadline, type CalendarEvent, type Category, type ClassificationRule, type MailMessage, type MailSettings, type PersonalReminderInput, type ReminderDraft, type SystemReminderInput } from "./types";
 
 const icons: Record<Category | "全部邮件", typeof Inbox> = { "全部邮件": Inbox, "待办": ListTodo, "学业": BookOpen, "校园事务": Building2, "社团活动": PartyPopper, "个人": UserRound, "外部": Globe2 };
 const colors: Record<Category, string> = { "待办": "coral", "学业": "violet", "校园事务": "amber", "社团活动": "green", "个人": "blue", "外部": "gray" };
@@ -28,11 +28,13 @@ export default function App() {
   const [showIspaceSettings, setShowIspaceSettings] = useState(false);
   const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([]);
   const [personalDraft, setPersonalDraft] = useState<PersonalReminderInput | null>(null);
+  const [systemReminderSources, setSystemReminderSources] = useState<string[]>([]);
 
   useEffect(() => {
     api.listMails().then((items) => { setMails(items); setSelectedId(items[0]?.id ?? null); setStatus("本地数据已就绪"); });
     api.listAssignments().then((items) => { setAssignments(items); setIspaceStatus(items.length ? `本地已有 ${items.length} 项待提交作业` : "尚未同步 iSpace 作业"); });
     api.listCalendarEvents().then(setCalendarEvents);
+    api.listSystemReminderSources().then(setSystemReminderSources);
     if (!("__TAURI_INTERNALS__" in window)) return;
     let minutes = 5; try { minutes = JSON.parse(localStorage.getItem("mail-settings") ?? "null")?.syncMinutes ?? 5; } catch { /* default */ }
     const timer = window.setInterval(() => { void sync(); }, Math.max(1, minutes) * 60_000);
@@ -41,6 +43,11 @@ export default function App() {
   const filtered = useMemo(() => mails.filter((mail) => (category === "全部邮件" || mail.category === category) && `${mail.subject} ${mail.senderName} ${mail.bodyText}`.toLowerCase().includes(query.toLowerCase())), [mails, category, query]);
   const selected = mails.find((mail) => mail.id === selectedId) ?? filtered[0];
   const refreshCalendar = async () => setCalendarEvents(await api.listCalendarEvents());
+  async function importSystemReminder(input: SystemReminderInput) {
+    await api.createSystemReminder(input);
+    setSystemReminderSources((old) => old.includes(input.sourceId) ? old : [...old, input.sourceId]);
+    setToast("已加入电脑提醒事项，到时由系统通知");
+  }
 
   async function sync() {
     setSyncing(true); setStatus("正在安全同步…");
@@ -93,7 +100,7 @@ export default function App() {
         <div className="avatar">CY</div>
       </header>
       <div className="content">
-        {view === "assignments" ? <AssignmentBoard assignments={assignments} status={ispaceStatus} query={query} syncing={syncing} onSync={syncIspace} onSetup={() => setShowIspaceSettings(true)} onToast={setToast}/> : view === "calendar" ? <CalendarBoard assignments={assignments} events={calendarEvents} query={query} onAdd={setPersonalDraft} onEdit={setPersonalDraft} onDelete={async (id) => { await api.deletePersonalReminder(id); await refreshCalendar(); setToast("个人提醒已删除"); }}/> : <>
+        {view === "assignments" ? <AssignmentBoard assignments={assignments} status={ispaceStatus} query={query} syncing={syncing} onSync={syncIspace} onSetup={() => setShowIspaceSettings(true)} onToast={setToast}/> : view === "calendar" ? <CalendarBoard assignments={assignments} events={calendarEvents} query={query} systemReminderSources={systemReminderSources} onImportSystem={importSystemReminder} onAdd={setPersonalDraft} onEdit={setPersonalDraft} onDelete={async (id) => { await api.deletePersonalReminder(id); await refreshCalendar(); setToast("个人提醒已删除"); }}/> : <>
         <section className="mail-column">
           <div className="list-heading"><div><h1>{category}</h1><p>{status}</p></div><button className="filter">最新优先 <ChevronDown size={14}/></button></div>
           {checked.size > 0 && <div className="selection-bar"><span>已选择 {checked.size} 封</span><button onClick={openReminder}><Bell size={14}/>生成提醒</button><button className="plain" onClick={() => setChecked(new Set())}>取消</button></div>}
@@ -115,17 +122,18 @@ export default function App() {
     {showIspaceSettings && <IspaceSettingsModal onClose={() => setShowIspaceSettings(false)} onToast={setToast} onSaved={syncIspace}/>} 
     {showRules && <RulesModal onClose={() => setShowRules(false)} onToast={setToast}/>} 
     {draft && <ReminderModal draft={draft} onClose={() => setDraft(null)} onCreated={async (mailId) => { setMails((old) => old.map((m) => m.id === mailId ? {...m, reminderStatus: "created"} : m)); setChecked(new Set()); setDraft(null); await refreshCalendar(); setToast("提醒已创建并加入日历"); }}/>} 
-    {personalDraft && <PersonalReminderModal initial={personalDraft} onClose={() => setPersonalDraft(null)} onSaved={async () => { await refreshCalendar(); setPersonalDraft(null); setToast("个人提醒已保存到日历"); }}/>} 
+    {personalDraft && <PersonalReminderModal initial={personalDraft} onClose={() => setPersonalDraft(null)} onSaved={async (saved, imported) => { await refreshCalendar(); if (imported) setSystemReminderSources((old) => old.includes(saved.id) ? old : [...old, saved.id]); setPersonalDraft(null); setToast(imported ? "已保存并加入电脑提醒事项" : "个人提醒已保存到日历"); }}/>} 
     {toast && <div className="toast" onAnimationEnd={() => setToast(null)}><Check size={16}/>{toast}</div>}
   </div>;
 }
 
-function CalendarBoard({ assignments, events, query, onAdd, onEdit, onDelete }: { assignments: AssignmentDeadline[]; events: CalendarEvent[]; query: string; onAdd: (value: PersonalReminderInput) => void; onEdit: (value: PersonalReminderInput) => void; onDelete: (id: string) => Promise<void> }) {
+function CalendarBoard({ assignments, events, query, systemReminderSources, onImportSystem, onAdd, onEdit, onDelete }: { assignments: AssignmentDeadline[]; events: CalendarEvent[]; query: string; systemReminderSources: string[]; onImportSystem: (input: SystemReminderInput) => Promise<void>; onAdd: (value: PersonalReminderInput) => void; onEdit: (value: PersonalReminderInput) => void; onDelete: (id: string) => Promise<void> }) {
   const today = new Date();
   const [month, setMonth] = useState(() => new Date(today.getFullYear(), today.getMonth(), 1));
   const [selectedDay, setSelectedDay] = useState(() => localDateKey(today));
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [importingId, setImportingId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState("");
   const merged = useMemo<CalendarEvent[]>(() => [
     ...assignments.map((item) => ({ id: `ispace:${item.id}`, title: item.title, notes: [item.course, item.description].filter(Boolean).join("\n\n"), startsAt: item.dueAt, priority: daysUntil(item.dueAt) <= 1 ? "high" as const : "normal" as const, kind: "ispace" as const, sourceId: item.id, sourceUrl: item.url, readOnly: true })),
@@ -142,7 +150,7 @@ function CalendarBoard({ assignments, events, query, onAdd, onEdit, onDelete }: 
   };
   return <section className="calendar-board">
     <div className="calendar-header"><div><div className="modal-kicker">邮件提醒 · iSpace · 个人安排</div><h1>统一日历</h1><p>所有时间均按本机时区显示；点击日期即可添加个人提醒。</p></div><div className="calendar-actions"><button className="secondary" onClick={() => { const now = new Date(); setMonth(new Date(now.getFullYear(), now.getMonth(), 1)); setSelectedDay(localDateKey(now)); }}>今天</button><button className="icon-button" aria-label="上个月" onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() - 1, 1))}><ChevronLeft size={17}/></button><strong>{month.toLocaleDateString("zh-CN", { year: "numeric", month: "long" })}</strong><button className="icon-button" aria-label="下个月" onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() + 1, 1))}><ChevronRight size={17}/></button><button className="primary add-calendar" onClick={() => createForDay(selectedDay)}><Plus size={15}/>添加提醒</button></div></div>
-    <div className="calendar-legend"><span><i className="ispace"/>iSpace DDL</span><span><i className="mail"/>邮件提醒</span><span><i className="personal"/>个人提醒</span></div>
+    <div className="calendar-legend"><span><i className="ispace"/>iSpace DDL</span><span><i className="mail"/>邮件提醒</span><span><i className="personal"/>个人提醒</span><em>铃声由电脑“提醒事项”的通知设置控制</em></div>
     <div className="calendar-layout"><div className="month-calendar"><div className="weekday-row">{["周一","周二","周三","周四","周五","周六","周日"].map((day) => <span key={day}>{day}</span>)}</div><div className="calendar-grid">{grid.map((date) => { const key = localDateKey(date); const dayEvents = dated.filter((item) => localDateKey(item.startsAt!) === key); const currentMonth = date.getMonth() === month.getMonth(); const isToday = key === localDateKey(today); return <div key={key} className={`calendar-day ${currentMonth ? "" : "outside"} ${selectedDay === key ? "selected-day" : ""}`} onClick={() => setSelectedDay(key)}><div className="day-number"><span className={isToday ? "today" : ""}>{date.getDate()}</span><button aria-label={`在 ${key} 添加提醒`} onClick={(event) => { event.stopPropagation(); createForDay(key); }}><Plus size={12}/></button></div><div className="day-events">{dayEvents.slice(0, 3).map((item) => <button key={item.id} className={`calendar-chip ${item.kind} priority-${item.priority}`} title={item.title} onClick={(event) => { event.stopPropagation(); setSelectedDay(key); }}><time>{new Date(item.startsAt!).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}</time>{item.title}</button>)}{dayEvents.length > 3 && <span className="more-events">还有 {dayEvents.length - 3} 项</span>}</div></div>; })}</div></div>
       <aside className="day-agenda">
         <div className="agenda-heading"><div><span>{new Date(`${selectedDay}T12:00:00`).toLocaleDateString("zh-CN", { weekday: "long" })}</span><strong>{new Date(`${selectedDay}T12:00:00`).toLocaleDateString("zh-CN", { month: "long", day: "numeric" })}</strong></div><button onClick={() => createForDay(selectedDay)}><Plus size={14}/></button></div>
@@ -153,6 +161,7 @@ function CalendarBoard({ assignments, events, query, onAdd, onEdit, onDelete }: 
             {item.kind === "personal" && <><button disabled={deletingId === item.id} onClick={() => onEdit({ id: item.id, title: item.title, notes: item.notes, startsAt: item.startsAt!, priority: item.priority })}><Pencil size={12}/>编辑</button>
               {pendingDeleteId === item.id ? <><button className="danger confirm-delete" disabled={deletingId === item.id} onClick={async () => { setDeletingId(item.id); setDeleteError(""); try { await onDelete(item.id); setPendingDeleteId(null); } catch (reason) { setDeleteError(`删除失败：${String(reason)}`); } finally { setDeletingId(null); } }}><Trash2 size={12}/>{deletingId === item.id ? "正在删除…" : "确认删除"}</button><button disabled={deletingId === item.id} onClick={() => setPendingDeleteId(null)}>取消</button></> : <button className="danger" onClick={() => { setDeleteError(""); setPendingDeleteId(item.id); }}><Trash2 size={12}/>删除</button>}</>}
             {item.sourceUrl && <button onClick={() => navigator.clipboard.writeText(item.sourceUrl!)}><Copy size={12}/>复制链接</button>}
+            {item.kind !== "mail" && (systemReminderSources.includes(item.id) ? <button disabled><Check size={12}/>已加入电脑提醒</button> : <button disabled={importingId === item.id} onClick={async () => { setImportingId(item.id); setDeleteError(""); try { await onImportSystem({ sourceId: item.id, title: item.title, notes: item.notes, dueAt: item.startsAt!, priority: item.priority }); } catch (reason) { setDeleteError(`导入电脑提醒失败：${String(reason)}`); } finally { setImportingId(null); } }}><Bell size={12}/>{importingId === item.id ? "正在导入…" : "加入电脑提醒"}</button>)}
           </div></div>
         </article>)}</div> : <div className="agenda-empty"><CalendarDays size={28}/><p>这一天还没有安排</p><button onClick={() => createForDay(selectedDay)}>添加个人提醒</button></div>}
         {unscheduled.length > 0 && <div className="unscheduled"><strong>未安排日期</strong>{unscheduled.map((item) => <span key={item.id}>{item.title}</span>)}</div>}
@@ -163,9 +172,34 @@ function CalendarBoard({ assignments, events, query, onAdd, onEdit, onDelete }: 
 
 function eventKindLabel(kind: CalendarEvent["kind"]) { return kind === "ispace" ? "iSpace DDL" : kind === "mail" ? "邮件提醒" : "个人提醒"; }
 
-function PersonalReminderModal({ initial, onClose, onSaved }: { initial: PersonalReminderInput; onClose: () => void; onSaved: () => Promise<void> }) {
-  const [draft, setDraft] = useState(initial); const [saving, setSaving] = useState(false); const [error, setError] = useState("");
-  return <div className="overlay" onMouseDown={onClose}><div className="modal reminder-modal" onMouseDown={(event) => event.stopPropagation()}><button className="close" onClick={onClose}><X/></button><div className="reminder-icon"><CalendarDays/></div><div className="modal-kicker">邮序日历 · 本地保存</div><h2>{draft.id ? "编辑个人提醒" : "添加个人提醒"}</h2><p className="muted">个人提醒会显示在统一日历中，不会上传到 iSpace。</p><label>标题<input autoFocus value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder="例如：复习宏观经济学"/></label><label>日期与时间<input type="datetime-local" value={toLocalInput(draft.startsAt)} onChange={(event) => event.target.value && setDraft({ ...draft, startsAt: new Date(event.target.value).toISOString() })}/></label><label>优先级<select value={draft.priority} onChange={(event) => setDraft({ ...draft, priority: event.target.value as PersonalReminderInput["priority"] })}><option value="low">低</option><option value="normal">普通</option><option value="high">高</option></select></label><label>备注<textarea rows={5} value={draft.notes} onChange={(event) => setDraft({ ...draft, notes: event.target.value })} placeholder="可填写地点、准备材料或补充说明"/></label>{error && <div className="connection-result error-result">{error}</div>}<div className="modal-actions"><button className="secondary" onClick={onClose}>取消</button><button className="primary" disabled={!draft.title.trim() || !draft.startsAt || saving} onClick={async () => { setSaving(true); setError(""); try { await api.savePersonalReminder(draft); await onSaved(); } catch (reason) { setError(String(reason)); } finally { setSaving(false); } }}>{saving ? "正在保存…" : "保存到日历"}</button></div></div></div>;
+function PersonalReminderModal({ initial, onClose, onSaved }: { initial: PersonalReminderInput; onClose: () => void; onSaved: (saved: CalendarEvent, imported: boolean) => Promise<void> }) {
+  const [draft, setDraft] = useState(initial);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [syncToSystem, setSyncToSystem] = useState(!initial.id);
+  const save = async () => {
+    setSaving(true); setError("");
+    let savedLocally = false;
+    try {
+      const saved = await api.savePersonalReminder(draft);
+      savedLocally = true;
+      if (syncToSystem) await api.createSystemReminder({ sourceId: saved.id, title: saved.title, notes: saved.notes, dueAt: saved.startsAt!, priority: saved.priority });
+      await onSaved(saved, syncToSystem);
+    } catch (reason) {
+      setError(savedLocally ? `已保存到邮序日历，但导入电脑提醒失败：${String(reason)}` : String(reason));
+    } finally { setSaving(false); }
+  };
+  return <div className="overlay" onMouseDown={onClose}><div className="modal reminder-modal" onMouseDown={(event) => event.stopPropagation()}>
+    <button className="close" onClick={onClose}><X/></button><div className="reminder-icon"><CalendarDays/></div><div className="modal-kicker">邮序日历 · 系统提醒</div>
+    <h2>{draft.id ? "编辑个人提醒" : "添加个人提醒"}</h2><p className="muted">提醒保存在本机；可同时加入电脑“提醒事项”，到时由系统通知。</p>
+    <label>标题<input autoFocus value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder="例如：复习宏观经济学"/></label>
+    <label>日期与时间<input type="datetime-local" value={toLocalInput(draft.startsAt)} onChange={(event) => event.target.value && setDraft({ ...draft, startsAt: new Date(event.target.value).toISOString() })}/></label>
+    <label>优先级<select value={draft.priority} onChange={(event) => setDraft({ ...draft, priority: event.target.value as PersonalReminderInput["priority"] })}><option value="low">低</option><option value="normal">普通</option><option value="high">高</option></select></label>
+    <label>备注<textarea rows={5} value={draft.notes} onChange={(event) => setDraft({ ...draft, notes: event.target.value })} placeholder="可填写地点、准备材料或补充说明"/></label>
+    <label className="system-reminder-option"><input type="checkbox" checked={syncToSystem} onChange={(event) => setSyncToSystem(event.target.checked)}/><span>同时加入电脑“提醒事项”<small>到达设定时间时显示通知；铃声取决于系统通知设置。</small></span></label>
+    {error && <div className="connection-result error-result">{error}</div>}
+    <div className="modal-actions"><button className="secondary" onClick={onClose}>取消</button><button className="primary" disabled={!draft.title.trim() || !draft.startsAt || saving} onClick={save}>{saving ? "正在保存…" : syncToSystem ? "保存并开启系统提醒" : "保存到日历"}</button></div>
+  </div></div>;
 }
 
 function AssignmentBoard({ assignments, status, query, syncing, onSync, onSetup, onToast }: { assignments: AssignmentDeadline[]; status: string; query: string; syncing: boolean; onSync: () => Promise<void>; onSetup: () => void; onToast: (value: string) => void }) {

@@ -6,7 +6,7 @@ mod models;
 mod reminder_provider;
 
 use crate::mail_provider::{ImapMailProvider, MailProvider};
-use crate::models::{AssignmentDeadline, CalendarEvent, ClassificationRule, MailMessage, MailSettings, PersonalReminderInput, ReminderDraft};
+use crate::models::{AssignmentDeadline, CalendarEvent, ClassificationRule, MailMessage, MailSettings, PersonalReminderInput, ReminderDraft, SystemReminderInput};
 use crate::reminder_provider::{ReminderProvider, SystemReminderProvider};
 use rusqlite::Connection;
 use std::sync::Mutex;
@@ -128,6 +128,24 @@ fn create_reminder(state: State<AppState>, draft: ReminderDraft) -> Result<Strin
 }
 
 #[tauri::command]
+fn create_system_reminder(state: State<AppState>, input: SystemReminderInput) -> Result<String, String> {
+    if input.source_id.trim().is_empty() { return Err("提醒来源不能为空".into()); }
+    if input.title.trim().is_empty() { return Err("提醒标题不能为空".into()); }
+    if !matches!(input.priority.as_str(), "low" | "normal" | "high") { return Err("提醒优先级无效".into()); }
+    chrono::DateTime::parse_from_rfc3339(&input.due_at).map_err(|_| "提醒时间格式无效".to_string())?;
+    if db::system_reminder_exists(&*state.db.lock().map_err(|_| "数据库锁异常")?, &input.source_id)? { return Err("这个事项已经加入过电脑提醒".into()); }
+    let draft = ReminderDraft { title: input.title, notes: input.notes, due_at: Some(input.due_at), priority: input.priority, source_mail_id: input.source_id.clone(), source_url: None };
+    let (platform, id) = SystemReminderProvider.create(&draft)?;
+    db::save_system_reminder_link(&*state.db.lock().map_err(|_| "数据库锁异常")?, &input.source_id, &platform, &id)?;
+    Ok(id)
+}
+
+#[tauri::command]
+fn list_system_reminder_sources(state: State<AppState>) -> Result<Vec<String>, String> {
+    db::list_system_reminder_sources(&*state.db.lock().map_err(|_| "数据库锁异常")?)
+}
+
+#[tauri::command]
 fn list_calendar_events(state: State<AppState>) -> Result<Vec<CalendarEvent>, String> {
     db::list_calendar_events(&*state.db.lock().map_err(|_| "数据库锁异常")?)
 }
@@ -196,5 +214,5 @@ pub fn run() {
         std::fs::create_dir_all(&data_dir)?;
         app.manage(AppState { db: Mutex::new(db::open(&data_dir.join("mail-focus.sqlite")).map_err(std::io::Error::other)?) });
         Ok(())
-    }).invoke_handler(tauri::generate_handler![list_mails,save_mail_settings,test_mail_connection,sync_mail,update_mail_category,create_reminder,list_calendar_events,save_personal_reminder,delete_personal_reminder,clear_local_data,list_rules,save_rule,delete_rule,save_ispace_calendar_url,list_assignments,sync_assignments]).run(tauri::generate_context!()).expect("failed to run application");
+    }).invoke_handler(tauri::generate_handler![list_mails,save_mail_settings,test_mail_connection,sync_mail,update_mail_category,create_reminder,create_system_reminder,list_system_reminder_sources,list_calendar_events,save_personal_reminder,delete_personal_reminder,clear_local_data,list_rules,save_rule,delete_rule,save_ispace_calendar_url,list_assignments,sync_assignments]).run(tauri::generate_context!()).expect("failed to run application");
 }
