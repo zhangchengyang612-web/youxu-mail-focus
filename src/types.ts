@@ -53,3 +53,25 @@ export interface AssignmentDeadline {
   url?: string;
   source: "iSpace";
 }
+
+export type CalendarEventKind = "ispace" | "mail" | "personal";
+
+export interface CalendarEvent {
+  id: string;
+  title: string;
+  notes: string;
+  startsAt: string | null;
+  priority: "low" | "normal" | "high";
+  kind: CalendarEventKind;
+  sourceId?: string;
+  sourceUrl?: string;
+  readOnly: boolean;
+}
+
+export interface PersonalReminderInput {
+  id?: string;
+  title: string;
+  notes: string;
+  startsAt: string;
+  priority: "low" | "normal" | "high";
+}

@@ -107,3 +107,23 @@ export function summarizeMail(mail: Pick<MailMessage, "subject" | "bodyText">, m
   const summary = selected || cleaned;
   return summary.length > maxLength ? `${summary.slice(0, maxLength).trimEnd()}…` : summary;
 }
+
+export function localDateKey(value: Date | string): string {
+  const date = typeof value === "string" ? new Date(value) : value;
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+export function buildMonthGrid(month: Date): Date[] {
+  const first = new Date(month.getFullYear(), month.getMonth(), 1);
+  const mondayOffset = (first.getDay() + 6) % 7;
+  const start = new Date(first);
+  start.setDate(first.getDate() - mondayOffset);
+  return Array.from({ length: 42 }, (_, index) => {
+    const date = new Date(start);
+    date.setDate(start.getDate() + index);
+    return date;
+  });
+}

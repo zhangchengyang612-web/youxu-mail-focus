@@ -41,3 +41,27 @@ pub struct AssignmentDeadline {
     pub url: Option<String>,
     pub source: String,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarEvent {
+    pub id: String,
+    pub title: String,
+    pub notes: String,
+    pub starts_at: Option<String>,
+    pub priority: String,
+    pub kind: String,
+    pub source_id: Option<String>,
+    pub source_url: Option<String>,
+    pub read_only: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PersonalReminderInput {
+    pub id: Option<String>,
+    pub title: String,
+    pub notes: String,
+    pub starts_at: String,
+    pub priority: String,
+}

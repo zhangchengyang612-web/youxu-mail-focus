@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyMail, createReminderDraft, extractDueDate, summarizeMail } from "./domain";
+import { buildMonthGrid, classifyMail, createReminderDraft, extractDueDate, localDateKey, summarizeMail } from "./domain";
 import type { MailMessage } from "./types";
 
 const mail: MailMessage = { id: "1", uid: 1, folder: "INBOX", senderName: "课程助教", senderEmail: "ta@bnbu.edu.cn", recipients: [], subject: "课程作业提醒", receivedAt: "2026-08-28T09:00:00Z", bodyText: "请在明天 10:30 前完成作业。", category: "学业", classificationReason: "", isRead: false };
@@ -26,5 +26,18 @@ describe("local mail summary", () => {
 
   it("removes quoted reply headers", () => {
     expect(summarizeMail({ subject: "提醒", bodyText: "请明天参加会议。\n发件人：旧邮件\n> 历史引用内容" })).toBe("请明天参加会议。");
+  });
+});
+
+describe("calendar", () => {
+  it("builds a six-week Monday-first month grid", () => {
+    const grid = buildMonthGrid(new Date(2026, 7, 1));
+    expect(grid).toHaveLength(42);
+    expect(grid[0].getDay()).toBe(1);
+    expect(localDateKey(grid[0])).toBe("2026-07-27");
+  });
+
+  it("creates stable local date keys", () => {
+    expect(localDateKey(new Date(2026, 7, 29, 18, 30))).toBe("2026-08-29");
   });
 });

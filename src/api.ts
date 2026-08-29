@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { demoMails } from "./demo";
-import type { AssignmentDeadline, Category, ClassificationRule, MailMessage, MailSettings, ReminderDraft } from "./types";
+import type { AssignmentDeadline, CalendarEvent, Category, ClassificationRule, MailMessage, MailSettings, PersonalReminderInput, ReminderDraft } from "./types";
 
 const isTauri = () => "__TAURI_INTERNALS__" in window;
 
@@ -25,8 +25,29 @@ export const api = {
     if (isTauri()) await invoke("update_mail_category", { mailId, category });
   },
   async createReminder(draft: ReminderDraft): Promise<string> {
-    if (!isTauri()) { await new Promise((r) => setTimeout(r, 500)); return `demo-${Date.now()}`; }
+    if (!isTauri()) {
+      await new Promise((r) => setTimeout(r, 500));
+      const events = await this.listCalendarEvents();
+      const event: CalendarEvent = { id: `mail:${draft.sourceMailId}`, title: draft.title, notes: draft.notes, startsAt: draft.dueAt, priority: draft.priority, kind: "mail", sourceId: draft.sourceMailId, sourceUrl: draft.sourceUrl, readOnly: true };
+      localStorage.setItem("calendar-events", JSON.stringify([...events.filter((item) => item.id !== event.id), event]));
+      return `demo-${Date.now()}`;
+    }
     return invoke("create_reminder", { draft });
+  },
+  async listCalendarEvents(): Promise<CalendarEvent[]> {
+    if (isTauri()) return invoke("list_calendar_events");
+    try { return JSON.parse(localStorage.getItem("calendar-events") ?? "[]"); } catch { return []; }
+  },
+  async savePersonalReminder(input: PersonalReminderInput): Promise<CalendarEvent> {
+    if (isTauri()) return invoke("save_personal_reminder", { input });
+    const events = await this.listCalendarEvents();
+    const event: CalendarEvent = { id: input.id ?? `personal:${crypto.randomUUID()}`, title: input.title, notes: input.notes, startsAt: input.startsAt, priority: input.priority, kind: "personal", readOnly: false };
+    localStorage.setItem("calendar-events", JSON.stringify([...events.filter((item) => item.id !== event.id), event]));
+    return event;
+  },
+  async deletePersonalReminder(eventId: string): Promise<void> {
+    if (isTauri()) return invoke("delete_personal_reminder", { eventId });
+    localStorage.setItem("calendar-events", JSON.stringify((await this.listCalendarEvents()).filter((item) => item.id !== eventId || item.kind !== "personal")));
   },
   async clearLocalData(): Promise<void> {
     if (isTauri()) await invoke("clear_local_data");

@@ -1,4 +1,4 @@
-use crate::models::{AssignmentDeadline, ClassificationRule, MailMessage, MailSettings, ParsedMail};
+use crate::models::{AssignmentDeadline, CalendarEvent, ClassificationRule, MailMessage, MailSettings, ParsedMail, PersonalReminderInput, ReminderDraft};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::Path;
 
@@ -22,6 +22,11 @@ pub fn open(path: &Path) -> Result<Connection, String> {
       CREATE TABLE IF NOT EXISTS assignments (
         id TEXT PRIMARY KEY, title TEXT NOT NULL, course TEXT NOT NULL, due_at TEXT NOT NULL,
         description TEXT NOT NULL DEFAULT '', url TEXT, source TEXT NOT NULL DEFAULT 'iSpace');
+      CREATE TABLE IF NOT EXISTS calendar_events (
+        id TEXT PRIMARY KEY, title TEXT NOT NULL, notes TEXT NOT NULL DEFAULT '', starts_at TEXT,
+        priority TEXT NOT NULL DEFAULT 'normal', kind TEXT NOT NULL,
+        source_id TEXT, source_url TEXT, read_only INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
       CREATE INDEX IF NOT EXISTS idx_mails_received ON mails(received_at DESC);")
       .map_err(|e| e.to_string())?;
     connection.execute_batch("UPDATE mails SET category = CASE category
@@ -125,11 +130,74 @@ pub fn save_rule(db: &Connection, rule: &ClassificationRule) -> Result<(), Strin
 
 pub fn delete_rule(db: &Connection, id: &str) -> Result<(), String> { db.execute("DELETE FROM rules WHERE id=?1", [id]).map_err(|e| e.to_string())?; Ok(()) }
 
-pub fn save_reminder_link(db: &Connection, mail_id: &str, platform: &str, external_id: &str) -> Result<(), String> {
+pub fn reminder_exists(db: &Connection, mail_id: &str) -> Result<bool, String> {
     let exists: Option<String> = db.query_row("SELECT external_id FROM reminder_links WHERE source_mail_id=?1 AND status='created'", [mail_id], |r| r.get(0)).optional().map_err(|e| e.to_string())?;
-    if exists.is_some() { return Err("这封邮件已经创建过提醒".into()); }
-    db.execute("INSERT INTO reminder_links(source_mail_id,platform,external_id,created_at,status) VALUES(?1,?2,?3,datetime('now'),'created')", params![mail_id,platform,external_id]).map_err(|e| e.to_string())?;
-    db.execute("UPDATE mails SET reminder_status='created' WHERE id=?1", [mail_id]).map_err(|e| e.to_string())?; Ok(())
+    Ok(exists.is_some())
 }
 
-pub fn clear(db: &Connection) -> Result<(), String> { db.execute_batch("DELETE FROM reminder_links; DELETE FROM mails; DELETE FROM rules; DELETE FROM assignments; DELETE FROM settings;").map_err(|e| e.to_string()) }
+pub fn save_created_reminder(db: &mut Connection, draft: &ReminderDraft, platform: &str, external_id: &str) -> Result<(), String> {
+    let transaction = db.transaction().map_err(|e| e.to_string())?;
+    transaction.execute("INSERT INTO reminder_links(source_mail_id,platform,external_id,created_at,status) VALUES(?1,?2,?3,datetime('now'),'created')", params![draft.source_mail_id,platform,external_id]).map_err(|e| e.to_string())?;
+    transaction.execute("UPDATE mails SET reminder_status='created' WHERE id=?1", [&draft.source_mail_id]).map_err(|e| e.to_string())?;
+    transaction.execute("INSERT INTO calendar_events(id,title,notes,starts_at,priority,kind,source_id,source_url,read_only,updated_at)
+      VALUES(?1,?2,?3,?4,?5,'mail',?6,?7,1,datetime('now'))
+      ON CONFLICT(id) DO UPDATE SET title=excluded.title,notes=excluded.notes,starts_at=excluded.starts_at,
+      priority=excluded.priority,source_url=excluded.source_url,updated_at=datetime('now')",
+      params![format!("mail:{}", draft.source_mail_id), draft.title, draft.notes, draft.due_at, draft.priority, draft.source_mail_id, draft.source_url]).map_err(|e| e.to_string())?;
+    transaction.commit().map_err(|e| e.to_string())
+}
+
+pub fn list_calendar_events(db: &Connection) -> Result<Vec<CalendarEvent>, String> {
+    let mut statement = db.prepare("SELECT id,title,notes,starts_at,priority,kind,source_id,source_url,read_only FROM calendar_events ORDER BY COALESCE(starts_at,'9999') ASC")
+        .map_err(|e| e.to_string())?;
+    let rows = statement.query_map([], |row| Ok(CalendarEvent {
+        id: row.get(0)?, title: row.get(1)?, notes: row.get(2)?, starts_at: row.get(3)?,
+        priority: row.get(4)?, kind: row.get(5)?, source_id: row.get(6)?, source_url: row.get(7)?,
+        read_only: row.get::<_, i32>(8)? != 0,
+    })).map_err(|e| e.to_string())?;
+    rows.collect::<Result<Vec<_>,_>>().map_err(|e| e.to_string())
+}
+
+pub fn save_personal_event(db: &Connection, input: &PersonalReminderInput) -> Result<CalendarEvent, String> {
+    let id = input.id.clone().unwrap_or_else(|| format!("personal:{}", uuid::Uuid::new_v4()));
+    db.execute("INSERT INTO calendar_events(id,title,notes,starts_at,priority,kind,read_only,updated_at)
+      VALUES(?1,?2,?3,?4,?5,'personal',0,datetime('now'))
+      ON CONFLICT(id) DO UPDATE SET title=excluded.title,notes=excluded.notes,starts_at=excluded.starts_at,
+      priority=excluded.priority,updated_at=datetime('now') WHERE calendar_events.kind='personal'",
+      params![id,input.title.trim(),input.notes.trim(),input.starts_at,input.priority]).map_err(|e| e.to_string())?;
+    db.query_row("SELECT id,title,notes,starts_at,priority,kind,source_id,source_url,read_only FROM calendar_events WHERE id=?1 AND kind='personal'", [&id], |row| Ok(CalendarEvent {
+        id: row.get(0)?, title: row.get(1)?, notes: row.get(2)?, starts_at: row.get(3)?,
+        priority: row.get(4)?, kind: row.get(5)?, source_id: row.get(6)?, source_url: row.get(7)?, read_only: row.get::<_,i32>(8)? != 0,
+    })).map_err(|e| e.to_string())
+}
+
+pub fn delete_personal_event(db: &Connection, id: &str) -> Result<(), String> {
+    let changed = db.execute("DELETE FROM calendar_events WHERE id=?1 AND kind='personal'", [id]).map_err(|e| e.to_string())?;
+    if changed == 0 { return Err("只能删除个人提醒".into()); }
+    Ok(())
+}
+
+pub fn clear(db: &Connection) -> Result<(), String> { db.execute_batch("DELETE FROM reminder_links; DELETE FROM mails; DELETE FROM rules; DELETE FROM assignments; DELETE FROM calendar_events; DELETE FROM settings;").map_err(|e| e.to_string()) }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn saves_updates_and_deletes_personal_calendar_events() {
+        let path = std::env::temp_dir().join(format!("mail-focus-calendar-{}.sqlite", uuid::Uuid::new_v4()));
+        let db = open(&path).expect("open test database");
+        let input = PersonalReminderInput { id: None, title: "复习课程".into(), notes: "第 3 章".into(), starts_at: "2026-09-02T10:00:00+08:00".into(), priority: "high".into() };
+        let created = save_personal_event(&db, &input).expect("save personal event");
+        assert_eq!(created.kind, "personal");
+        assert!(!created.read_only);
+        assert_eq!(list_calendar_events(&db).expect("list events").len(), 1);
+
+        let updated = PersonalReminderInput { id: Some(created.id.clone()), title: "复习课程（更新）".into(), ..input };
+        assert_eq!(save_personal_event(&db, &updated).expect("update event").title, "复习课程（更新）");
+        delete_personal_event(&db, &created.id).expect("delete personal event");
+        assert!(list_calendar_events(&db).expect("list after delete").is_empty());
+        drop(db);
+        let _ = std::fs::remove_file(path);
+    }
+}
