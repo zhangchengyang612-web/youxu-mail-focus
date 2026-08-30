@@ -1,6 +1,6 @@
 [package]
 name = "wecom-mail-focus"
-version = "0.4.2"
+version = "0.4.3"
 description = "Local-first WeCom mail classifier and reminder assistant"
 authors = ["Mail Focus"]
 edition = "2021"

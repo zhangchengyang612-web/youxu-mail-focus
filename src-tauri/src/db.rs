@@ -113,7 +113,7 @@ pub fn upsert_mail(db: &Connection, mail: &ParsedMail, category: &str, reason: &
 
 pub fn list_mails(db: &Connection) -> Result<Vec<MailMessage>, String> {
     let mut statement = db.prepare("SELECT id,uid,folder,sender_name,sender_email,recipients,subject,received_at,body_text,category,classification_reason,is_read,reminder_status FROM mails ORDER BY received_at DESC").map_err(|e| e.to_string())?;
-    let rows = statement.query_map([], |r| Ok(MailMessage { id:r.get(0)?, uid:r.get(1)?, folder:r.get(2)?, sender_name:r.get(3)?, sender_email:r.get(4)?, recipients:serde_json::from_str(&r.get::<_,String>(5)?).unwrap_or_default(), subject:r.get(6)?, received_at:r.get(7)?, body_text:r.get(8)?, category:r.get(9)?, classification_reason:r.get(10)?, is_read:r.get::<_,i32>(11)? != 0, reminder_status:r.get(12)? })).map_err(|e| e.to_string())?;
+    let rows = statement.query_map([], |r| Ok(MailMessage { id:r.get(0)?, uid:r.get(1)?, folder:r.get(2)?, sender_name:r.get(3)?, sender_email:r.get(4)?, recipients:serde_json::from_str(&r.get::<_,String>(5)?).unwrap_or_default(), subject:r.get(6)?, received_at:r.get(7)?, body_text:crate::mail_provider::normalize_body_text(r.get(8)?), category:r.get(9)?, classification_reason:r.get(10)?, is_read:r.get::<_,i32>(11)? != 0, reminder_status:r.get(12)? })).map_err(|e| e.to_string())?;
     rows.collect::<Result<Vec<_>,_>>().map_err(|e| e.to_string())
 }
 

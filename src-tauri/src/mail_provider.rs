@@ -89,7 +89,16 @@ fn parse_message(uid: u32, raw: &[u8], is_read: bool) -> Result<ParsedMail, Stri
     let (sender_name, sender_email) = split_address(&from);
     let recipients = parsed.headers.get_first_value("To").unwrap_or_default().split(',').map(|v| split_address(v).1).filter(|v| !v.is_empty()).collect();
     let received_at = parsed.headers.get_first_value("Date").and_then(|v| mailparse::dateparse(&v).ok()).and_then(|ts| chrono::DateTime::from_timestamp(ts,0)).unwrap_or_else(Utc::now).to_rfc3339();
-    Ok(ParsedMail { uid, sender_name, sender_email, recipients, subject: parsed.headers.get_first_value("Subject").unwrap_or_else(|| "（无主题）".into()), received_at, body_text: extract_text(&parsed), is_read })
+    Ok(ParsedMail { uid, sender_name, sender_email, recipients, subject: parsed.headers.get_first_value("Subject").unwrap_or_else(|| "（无主题）".into()), received_at, body_text: normalize_body_text(extract_text(&parsed)), is_read })
+}
+
+pub(crate) fn normalize_body_text(text: String) -> String {
+    text.replace("&amp;nbsp;", " ")
+        .replace("&nbsp;", " ")
+        .replace("&#160;", " ")
+        .replace("&#xA0;", " ")
+        .replace("&#xa0;", " ")
+        .replace('\u{00a0}', " ")
 }
 
 fn extract_text(mail: &MimeMail<'_>) -> String {
@@ -114,4 +123,15 @@ fn split_address(value: &str) -> (String, String) {
         return (value[..start].trim().trim_matches('"').to_string(), value[start+1..end].trim().to_string());
     }
     let email = value.trim().to_string(); (email.clone(), email)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_body_text;
+
+    #[test]
+    fn decodes_non_breaking_space_entities_in_mail_text() {
+        let text = normalize_body_text("·&nbsp; A ·&amp;nbsp; B ·&#160; C ·&#xA0; 16:00。".into());
+        assert_eq!(text, "·  A ·  B ·  C ·  16:00。");
+    }
 }
