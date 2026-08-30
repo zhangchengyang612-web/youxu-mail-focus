@@ -62,6 +62,6 @@ jobs:
           body: |
             未签名的 Windows 安装包（.exe），仅供内部测试。
             首次运行若出现 SmartScreen 提示，请点击「更多信息」→「仍要运行」。
-            说明：Windows 版邮件读取、分类、iSpace DDL 同步可用；「创建系统提醒」需要配置 Microsoft Entra Client ID 后才能使用。
+            说明：Windows 版邮件读取、分类、iSpace DDL 同步和本机定时提醒均可用；无需 Microsoft Entra 或管理员权限。
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

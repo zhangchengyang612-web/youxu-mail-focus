@@ -10,7 +10,7 @@
 - MIME 正文提取、HTML 转纯文本、SQLite 持久化和系统钥匙串凭据存储。
 - 待办、学业、校园事务、社团活动、个人、外部六类关键词分类；支持发件人、域名、主题和正文自定义规则。
 - 邮件搜索、分类筛选、手动改类、批量选择、提醒草稿提取、截止时间编辑及重复导入保护。
-- macOS 写入 Apple 提醒事项；Windows Microsoft To Do 适配器接口和 Entra 配置入口已预留。
+- macOS 写入 Apple 提醒事项；Windows 使用任务计划程序创建本机定时提醒，无需 Microsoft Entra 或管理员权限。
 - 浏览器开发模式自动使用示例邮件，不读取真实邮箱，方便界面开发。
 
 ## 开发运行
@@ -51,7 +51,7 @@ macOS 生成 `.dmg`，Windows 生成 `.msi`。未签名安装包仅适合内部�
 ## 平台提醒
 
 - macOS：首次创建提醒时会触发系统自动化/提醒事项权限提示。拒绝后可在“系统设置 → 隐私与安全性”中重新授权。
-- Windows：发布前需注册 Microsoft Entra 应用，使用 OAuth PKCE 获取 `Tasks.ReadWrite` 权限；将 Client ID 写入构建环境。当前界面会在未配置时给出明确错误，不会静默丢失草稿。
+- Windows：使用当前用户的任务计划程序创建一次性本机提醒，到时显示“邮序提醒”窗口；无需 Microsoft Entra、Microsoft To Do 登录或管理员权限。Windows 本机提醒必须设置日期和时间。
 
 ## 数据位置与隐私
 

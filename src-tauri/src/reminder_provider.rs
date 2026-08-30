@@ -34,10 +34,37 @@ impl ReminderProvider for SystemReminderProvider {
         }
         #[cfg(target_os = "windows")]
         {
-            // The production adapter uses OAuth PKCE and Microsoft Graph Tasks.ReadWrite.
-            // A tenant/client id must be supplied before a distributable Windows build.
-            let _ = draft;
-            return Err("Windows 版需要先在设置中配置 Microsoft Entra Client ID 并完成 To Do 授权".into());
+            let due = required_due_date(draft.due_at.as_deref())?;
+            let task_id = format!("YouXu-{}", Uuid::new_v4());
+            let title = draft.title.chars().take(200).collect::<String>();
+            let notes = draft.notes.chars().take(1200).collect::<String>();
+            let script = r#"$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
+$at = [DateTimeOffset]::Parse($env:YOUXU_DUE, [Globalization.CultureInfo]::InvariantCulture).LocalDateTime
+if ($at -le (Get-Date)) { throw '提醒时间必须晚于当前时间' }
+function Quote-PowerShell([string]$value) { return "'" + $value.Replace("'", "''") + "'" }
+$message = $env:YOUXU_TITLE
+if ($env:YOUXU_NOTES) { $message += "`n`n" + $env:YOUXU_NOTES }
+$child = "Add-Type -AssemblyName PresentationFramework; [System.Windows.MessageBox]::Show($(Quote-PowerShell $message), '邮序提醒') | Out-Null"
+$encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($child))
+$action = New-ScheduledTaskAction -Execute "$PSHOME\powershell.exe" -Argument "-NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand $encoded"
+$trigger = New-ScheduledTaskTrigger -Once -At $at
+$user = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+$principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
+Register-ScheduledTask -TaskName $env:YOUXU_TASK -Action $action -Trigger $trigger -Principal $principal -Description '邮序本机提醒' -Force | Out-Null
+"#;
+            let out = Command::new("powershell.exe")
+                .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script])
+                .env("YOUXU_DUE", due)
+                .env("YOUXU_TASK", &task_id)
+                .env("YOUXU_TITLE", title)
+                .env("YOUXU_NOTES", notes)
+                .output()
+                .map_err(|e| format!("无法启动 Windows 任务计划程序：{e}"))?;
+            if !out.status.success() {
+                return Err(format!("Windows 本机提醒创建失败：{}", String::from_utf8_lossy(&out.stderr).trim()));
+            }
+            return Ok(("windows-task-scheduler".into(), task_id));
         }
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         { let _ = draft; Err("当前平台暂不支持系统提醒".into()) }
@@ -48,6 +75,11 @@ fn validate_due_date(value: Option<&str>) -> Result<Option<&str>, String> {
     let Some(value) = value else { return Ok(None); };
     chrono::DateTime::parse_from_rfc3339(value).map_err(|_| "提醒时间格式无效".to_string())?;
     Ok(Some(value))
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn required_due_date(value: Option<&str>) -> Result<&str, String> {
+    validate_due_date(value)?.ok_or_else(|| "Windows 本机提醒必须设置日期和时间".to_string())
 }
 
 #[cfg(test)]
@@ -62,5 +94,11 @@ mod tests {
     #[test]
     fn rejects_invalid_due_date_before_creating_reminder() {
         assert!(validate_due_date(Some("08/30/2026 04:10:00")).is_err());
+    }
+
+    #[test]
+    fn windows_local_reminder_requires_a_due_date() {
+        assert!(required_due_date(None).is_err());
+        assert_eq!(required_due_date(Some("2026-08-31T18:00:00+08:00")).unwrap(), "2026-08-31T18:00:00+08:00");
     }
 }
