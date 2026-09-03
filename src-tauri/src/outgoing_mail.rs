@@ -4,7 +4,7 @@ use lettre::message::{header::ContentType, Attachment, Mailbox, MultiPart};
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{Message, SmtpTransport, Transport};
 use regex::Regex;
-use reqwest::blocking::Client;
+use reqwest::{blocking::Client, StatusCode};
 use serde_json::Value;
 use std::collections::HashSet;
 use std::time::Duration;
@@ -54,23 +54,43 @@ pub fn send(settings: &MailSettings, sender_name: &str, password: &str, outgoing
     Ok(format!("发送成功 · {}", response.code()))
 }
 
-pub fn translate_english_to_chinese(text: &str) -> Result<String, String> {
+pub fn translate_english_to_chinese(text: &str, consent: bool) -> Result<String, String> {
+    if !consent { return Err("未同意发送邮件正文，已取消在线翻译".into()); }
     let text = text.trim();
     if text.is_empty() { return Err("邮件正文为空".into()); }
     if text.chars().count() > 12_000 { return Err("邮件正文过长，请展开后选择需要翻译的部分".into()); }
     let client = Client::builder().timeout(Duration::from_secs(25)).user_agent("MailFocus-BNBU/0.6").build().map_err(|e| e.to_string())?;
     let mut translated = Vec::new();
-    for chunk in split_utf8_chunks(text, 450) {
-        let response: Value = client.get("https://api.mymemory.translated.net/get")
-            .query(&[("q", chunk), ("langpair", "en|zh-CN")])
-            .send().and_then(|response| response.error_for_status())
-            .map_err(|error| format!("在线翻译失败：{error}"))?
-            .json().map_err(|error| format!("翻译服务返回格式无效：{error}"))?;
+    for (index, chunk) in split_utf8_chunks(text, 450).into_iter().enumerate() {
+        if index > 0 { std::thread::sleep(Duration::from_millis(500)); }
+        let response = translate_chunk(&client, chunk)?;
         let value = response.pointer("/responseData/translatedText").and_then(Value::as_str).unwrap_or_default().trim();
         if value.is_empty() { return Err("翻译服务没有返回译文".into()); }
         translated.push(value.to_string());
     }
     Ok(translated.join("\n"))
+}
+
+fn translate_chunk(client: &Client, chunk: &str) -> Result<Value, String> {
+    for attempt in 0..=2 {
+        let response = client.get("https://api.mymemory.translated.net/get")
+            .query(&[("q", chunk), ("langpair", "en|zh-CN")])
+            .send().map_err(|_| "无法连接在线翻译服务，请检查网络后重试".to_string())?;
+        if response.status() == StatusCode::TOO_MANY_REQUESTS {
+            if attempt == 2 { return Err("在线翻译服务请求过多，请稍后再试".into()); }
+            std::thread::sleep(Duration::from_secs(1 << attempt));
+            continue;
+        }
+        if !response.status().is_success() { return Err(format!("在线翻译服务暂时不可用（HTTP {}）", response.status().as_u16())); }
+        let value: Value = response.json().map_err(|_| "翻译服务返回格式无效".to_string())?;
+        if value.get("responseStatus").and_then(Value::as_u64) == Some(429) {
+            if attempt == 2 { return Err("在线翻译服务请求过多，请稍后再试".into()); }
+            std::thread::sleep(Duration::from_secs(1 << attempt));
+            continue;
+        }
+        return Ok(value);
+    }
+    unreachable!()
 }
 
 fn split_utf8_chunks(value: &str, max_bytes: usize) -> Vec<&str> {
@@ -198,5 +218,10 @@ mod tests {
         assert!(text.ends_with("北师港浸大 BNBU\nStudent Name"));
         assert!(html.contains("北师港浸大 BNBU"));
         assert!(html.contains("Student Name"));
+    }
+
+    #[test]
+    fn refuses_online_translation_without_consent() {
+        assert_eq!(translate_english_to_chinese("Private text", false).unwrap_err(), "未同意发送邮件正文，已取消在线翻译");
     }
 }

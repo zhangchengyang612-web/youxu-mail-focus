@@ -4,8 +4,9 @@ import { api } from "./api";
 import { buildMonthGrid, createReminderDraft, localDateKey, summarizeMail } from "./domain";
 import { categories, type AcademicCalendarImport, type AssignmentDeadline, type CalendarEvent, type Category, type ClassificationRule, type MailMessage, type MailSettings, type OutgoingAttachment, type OutgoingMail, type PersonalReminderInput, type ProfessorContact, type ReminderDraft, type SystemReminderInput } from "./types";
 
-const icons: Record<Category | "全部邮件", typeof Inbox> = { "全部邮件": Inbox, "待办": ListTodo, "学业": BookOpen, "校园事务": Building2, "社团活动": PartyPopper, "实习": BriefcaseBusiness, "个人": UserRound, "外部": Globe2 };
-const colors: Record<Category, string> = { "待办": "coral", "学业": "violet", "校园事务": "amber", "社团活动": "green", "实习": "teal", "个人": "blue", "外部": "gray" };
+type MailFilter = Category | "待办" | "全部邮件";
+const icons: Record<MailFilter, typeof Inbox> = { "全部邮件": Inbox, "待办": ListTodo, "学业": BookOpen, "校园事务": Building2, "社团活动": PartyPopper, "实习": BriefcaseBusiness, "个人": UserRound, "外部": Globe2 };
+const colors: Record<Category, string> = { "学业": "violet", "校园事务": "amber", "社团活动": "green", "实习": "teal", "个人": "blue", "外部": "gray" };
 
 const defaultSettings: MailSettings = { host: "imap.exmail.qq.com", port: 993, email: "", senderName: "", initialDays: 0, syncMinutes: 5 };
 const defaultAcademicCalendar: AcademicCalendarImport = {
@@ -36,7 +37,7 @@ const defaultAcademicCalendar: AcademicCalendarImport = {
 
 export default function App() {
   const [mails, setMails] = useState<MailMessage[]>([]);
-  const [category, setCategory] = useState<Category | "全部邮件">("全部邮件");
+  const [category, setCategory] = useState<MailFilter>("全部邮件");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [query, setQuery] = useState("");
@@ -71,7 +72,7 @@ export default function App() {
     const timer = window.setInterval(() => { void sync(); }, Math.max(1, minutes) * 60_000);
     return () => window.clearInterval(timer);
   }, []);
-  const filtered = useMemo(() => mails.filter((mail) => (category === "全部邮件" || mail.category === category) && `${mail.subject} ${mail.senderName} ${mail.bodyText}`.toLowerCase().includes(query.toLowerCase())), [mails, category, query]);
+  const filtered = useMemo(() => mails.filter((mail) => (category === "全部邮件" || (category === "待办" ? mail.isTodo : mail.category === category)) && `${mail.subject} ${mail.senderName} ${mail.bodyText}`.toLowerCase().includes(query.toLowerCase())), [mails, category, query]);
   const selected = mails.find((mail) => mail.id === selectedId) ?? filtered[0];
   const refreshCalendar = async () => setCalendarEvents(await api.listCalendarEvents());
   async function importSystemReminder(input: SystemReminderInput) {
@@ -104,6 +105,12 @@ export default function App() {
     setMails((old) => old.map((item) => item.id === selected.id ? { ...item, category: next, classificationReason: "手动分类" } : item));
     await api.updateCategory(selected.id, next);
   }
+  async function changeTodo() {
+    if (!selected) return;
+    const isTodo = !selected.isTodo;
+    setMails((old) => old.map((item) => item.id === selected.id ? { ...item, isTodo } : item));
+    await api.updateTodo(selected.id, isTodo);
+  }
 
   return <div className="app-shell">
     <aside className="sidebar">
@@ -111,7 +118,7 @@ export default function App() {
       <button className="compose" onClick={() => setComposeInitial({})}><MailPlus size={17}/>写邮件</button>
       <nav>
         <p className="nav-label">邮件</p>
-        {(["全部邮件", ...categories] as const).map((item) => { const Icon = icons[item]; const count = item === "全部邮件" ? mails.length : mails.filter((mail) => mail.category === item).length; return <button key={item} className={view === "mail" && category === item ? "nav-item active" : "nav-item"} onClick={() => { setView("mail"); setCategory(item); }}><Icon size={17}/><span>{item}</span><em>{count}</em></button>; })}
+        {(["全部邮件", "待办", ...categories] as const).map((item) => { const Icon = icons[item]; const count = item === "全部邮件" ? mails.length : item === "待办" ? mails.filter((mail) => mail.isTodo).length : mails.filter((mail) => mail.category === item).length; return <button key={item} className={view === "mail" && category === item ? "nav-item active" : "nav-item"} onClick={() => { setView("mail"); setCategory(item); }}><Icon size={17}/><span>{item}</span><em>{count}</em></button>; })}
         <p className="nav-label nav-space">iSpace</p>
         <button className={view === "assignments" ? "nav-item active" : "nav-item"} onClick={() => setView("assignments")}><CalendarClock size={17}/><span>作业 DDL</span><em>{assignments.length}</em></button>
         <p className="nav-label nav-space">规划</p>
@@ -138,14 +145,14 @@ export default function App() {
           {checked.size > 0 && <div className="selection-bar"><span>已选择 {checked.size} 封</span><button onClick={openReminder}><Bell size={14}/>生成提醒</button><button className="plain" onClick={() => setChecked(new Set())}>取消</button></div>}
           <div className="mail-list">{filtered.map((mail) => <article key={mail.id} className={`mail-card ${selected?.id === mail.id ? "selected" : ""} ${!mail.isRead ? "unread" : ""}`} onClick={() => setSelectedId(mail.id)}>
             <button className={`check ${checked.has(mail.id) ? "checked" : ""}`} aria-label="选择邮件" onClick={(e) => { e.stopPropagation(); toggle(mail.id); }}>{checked.has(mail.id) && <Check size={12}/>}</button>
-            <div className="mail-copy"><div className="mail-meta"><strong>{mail.senderName}</strong><time>{new Date(mail.receivedAt).toLocaleDateString("zh-CN", { month: "short", day: "numeric" })}</time></div><h3>{mail.subject}</h3><p>{summarizeMail(mail, 100)}</p><div className="tags"><span className={`tag ${colors[mail.category]}`}>{mail.category}</span>{mail.reminderStatus === "created" && <span className="reminded"><Check size={11}/>已创建提醒</span>}</div></div>
+            <div className="mail-copy"><div className="mail-meta"><strong>{mail.senderName}</strong><time>{new Date(mail.receivedAt).toLocaleDateString("zh-CN", { month: "short", day: "numeric" })}</time></div><h3>{mail.subject}</h3><p>{summarizeMail(mail, 100)}</p><div className="tags"><span className={`tag ${colors[mail.category]}`}>{mail.category}</span>{mail.isTodo && <span className="tag coral">待办</span>}{mail.reminderStatus === "created" && <span className="reminded"><Check size={11}/>已创建提醒</span>}</div></div>
           </article>)}</div>
         </section>
 
         <section className="detail-column">{selected ? <>
           <div className="detail-toolbar"><button className="reply-button" onClick={() => setComposeInitial({ to: selected.senderEmail, subject: selected.subject.startsWith("Re:") ? selected.subject : `Re: ${selected.subject}`, body: `\n\n—— 原始邮件 ——\n发件人：${selected.senderName} <${selected.senderEmail}>\n时间：${new Date(selected.receivedAt).toLocaleString("zh-CN")}\n主题：${selected.subject}\n\n${selected.bodyText}` })}><Reply size={16}/>回复</button><button onClick={openReminder}><Bell size={16}/>生成提醒</button><button className="icon-button"><MoreHorizontal size={18}/></button></div>
-          <article className="mail-detail"><span className={`tag ${colors[selected.category]}`}>{selected.category}</span><h2>{selected.subject}</h2><div className="sender-row"><div className="sender-avatar">{selected.senderName.slice(0, 1)}</div><div><strong>{selected.senderName}</strong><span>{selected.senderEmail}</span></div><time>{new Date(selected.receivedAt).toLocaleString("zh-CN")}</time></div><section className="mail-summary"><div className="summary-heading"><div><span>本地邮件摘要</span><strong>重点内容</strong></div><button onClick={() => setExpandedMails((old) => { const next = new Set(old); next.has(selected.id) ? next.delete(selected.id) : next.add(selected.id); return next; })}>{expandedMails.has(selected.id) ? "收起" : "展开"}</button></div><p>{summarizeMail(selected)}</p></section>{isLikelyEnglish(`${selected.subject}\n${selected.bodyText}`) && <section className="mail-translation"><div><span>英文邮件</span><strong>中文翻译</strong><small>点击后正文将发送到 MyMemory 翻译服务</small></div><button disabled={translatingId === selected.id} onClick={async () => { setTranslatingId(selected.id); setTranslationErrors((current) => ({ ...current, [selected.id]: "" })); try { const translation = await api.translateMail(selected.bodyText); setTranslations((current) => ({ ...current, [selected.id]: translation })); } catch (reason) { setTranslationErrors((current) => ({ ...current, [selected.id]: String(reason) })); } finally { setTranslatingId(null); } }}>{translatingId === selected.id ? "翻译中…" : translations[selected.id] ? "重新翻译" : "翻译为中文"}</button>{translations[selected.id] && <p>{translations[selected.id]}</p>}{translationErrors[selected.id] && <p className="translation-error">{translationErrors[selected.id]}</p>}</section>}{expandedMails.has(selected.id) && <div className="message-body"><div className="full-mail-label">完整邮件内容</div>{selected.bodyText.split("\n").map((line, i) => <p key={i}>{line || <br/>}</p>)}</div>}
-          <div className="classification"><Sparkles size={17}/><div><strong>本地智能分类</strong><span>{selected.classificationReason}</span></div><select value={selected.category} onChange={(e) => changeCategory(e.target.value as Category)}>{categories.map((item) => <option key={item}>{item}</option>)}</select></div></article>
+          <article className="mail-detail"><div className="tags"><span className={`tag ${colors[selected.category]}`}>{selected.category}</span>{selected.isTodo && <span className="tag coral">待办</span>}</div><h2>{selected.subject}</h2><div className="sender-row"><div className="sender-avatar">{selected.senderName.slice(0, 1)}</div><div><strong>{selected.senderName}</strong><span>{selected.senderEmail}</span></div><time>{new Date(selected.receivedAt).toLocaleString("zh-CN")}</time></div><section className="mail-summary"><div className="summary-heading"><div><span>本地邮件摘要</span><strong>重点内容</strong></div><button onClick={() => setExpandedMails((old) => { const next = new Set(old); next.has(selected.id) ? next.delete(selected.id) : next.add(selected.id); return next; })}>{expandedMails.has(selected.id) ? "收起" : "展开"}</button></div><p>{summarizeMail(selected)}</p></section>{isLikelyEnglish(`${selected.subject}\n${selected.bodyText}`) && <section className="mail-translation"><div><span>英文邮件</span><strong>中文翻译</strong><small>正文仅在你确认后发送到 MyMemory；不会发送邮箱地址</small></div><button disabled={translatingId === selected.id} onClick={async () => { if (!window.confirm("在线翻译会将当前邮件正文发送给 MyMemory。请勿翻译含隐私或敏感内容的邮件。是否继续？")) return; setTranslatingId(selected.id); setTranslationErrors((current) => ({ ...current, [selected.id]: "" })); try { const translation = await api.translateMail(selected.bodyText); setTranslations((current) => ({ ...current, [selected.id]: translation })); } catch (reason) { setTranslationErrors((current) => ({ ...current, [selected.id]: String(reason) })); } finally { setTranslatingId(null); } }}>{translatingId === selected.id ? "翻译中…" : translations[selected.id] ? "重新翻译" : "翻译为中文"}</button>{translations[selected.id] && <p>{translations[selected.id]}</p>}{translationErrors[selected.id] && <p className="translation-error">{translationErrors[selected.id]}</p>}</section>}{expandedMails.has(selected.id) && <div className="message-body"><div className="full-mail-label">完整邮件内容</div>{selected.bodyText.split("\n").map((line, i) => <p key={i}>{line || <br/>}</p>)}</div>}
+          <div className="classification"><Sparkles size={17}/><div><strong>本地智能分类</strong><span>{selected.classificationReason}</span></div><button className={`todo-toggle ${selected.isTodo ? "active" : ""}`} onClick={changeTodo}><ListTodo size={14}/>{selected.isTodo ? "移出待办" : "添加待办"}</button><select value={selected.category} onChange={(e) => changeCategory(e.target.value as Category)}>{categories.map((item) => <option key={item}>{item}</option>)}</select></div></article>
         </> : <div className="empty">选择一封邮件查看详情</div>}</section>
         </>}
       </div>
@@ -355,7 +362,7 @@ function toLocalInput(value: string) { const d = new Date(value); const off = d.
 
 function RulesModal({ onClose, onToast }: { onClose: () => void; onToast: (v: string) => void }) {
   const [rules, setRules] = useState<ClassificationRule[]>([]);
-  const [draft, setDraft] = useState<ClassificationRule>({ id: "", category: "待办", field: "sender", operator: "contains", value: "", priority: 50, enabled: true });
+  const [draft, setDraft] = useState<ClassificationRule>({ id: "", category: "学业", field: "sender", operator: "contains", value: "", priority: 50, enabled: true });
   useEffect(() => { api.listRules().then(setRules); }, []);
   async function add() { if (!draft.value.trim()) return; const rule = {...draft, id: draft.id || crypto.randomUUID()}; await api.saveRule(rule); setRules((old) => [...old.filter((r) => r.id !== rule.id), rule].sort((a,b) => b.priority-a.priority)); setDraft({...draft,id:"",value:""}); onToast("分类规则已保存"); }
   return <div className="overlay" onMouseDown={onClose}><div className="modal rules-modal" onMouseDown={(e) => e.stopPropagation()}><button className="close" onClick={onClose}><X/></button><div className="modal-kicker">本地规则</div><h2>分类规则</h2><p className="muted">数值越高越优先；规则命中后不会再执行内置关键词分类。</p><div className="rule-builder"><select value={draft.field} onChange={(e) => setDraft({...draft,field:e.target.value as ClassificationRule["field"]})}><option value="sender">发件人</option><option value="domain">发件域名</option><option value="subject">主题</option><option value="body">正文</option></select><select value={draft.operator} onChange={(e) => setDraft({...draft,operator:e.target.value as ClassificationRule["operator"]})}><option value="contains">包含</option><option value="equals">等于</option><option value="regex">正则匹配</option></select><input aria-label="规则匹配值" value={draft.value} placeholder="匹配值" onChange={(e) => setDraft({...draft,value:e.target.value})}/><select value={draft.category} onChange={(e) => setDraft({...draft,category:e.target.value as Category})}>{categories.map((c)=><option key={c}>{c}</option>)}</select><input aria-label="规则优先级" type="number" value={draft.priority} onChange={(e) => setDraft({...draft,priority:Number(e.target.value)})}/><button className="primary" onClick={add}>添加规则</button></div><div className="rule-list">{rules.length === 0 ? <div className="rule-empty">还没有自定义规则</div> : rules.map((rule) => <div className="rule-row" key={rule.id}><span className={`tag ${colors[rule.category]}`}>{rule.category}</span><strong>{rule.field}</strong><span>{rule.operator}</span><code>{rule.value}</code><em>优先级 {rule.priority}</em><button aria-label="删除规则" onClick={async()=>{await api.deleteRule(rule.id);setRules((old)=>old.filter((r)=>r.id!==rule.id));}}><Trash2 size={14}/></button></div>)}</div><div className="modal-actions"><button className="primary" onClick={onClose}>完成</button></div></div></div>;

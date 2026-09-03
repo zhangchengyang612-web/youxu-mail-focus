@@ -8,7 +8,7 @@ mod outgoing_mail;
 mod reminder_provider;
 
 use crate::mail_provider::{ImapMailProvider, MailProvider};
-use crate::models::{AcademicCalendarImport, AssignmentDeadline, CalendarEvent, ClassificationRule, MailIdentity, MailMessage, MailSettings, OutgoingMail, PersonalReminderInput, ProfessorContact, ReminderDraft, SystemReminderInput};
+use crate::models::{AcademicCalendarImport, AssignmentDeadline, CalendarEvent, ClassificationRule, MailIdentity, MailMessage, MailSettings, OutgoingMail, ParsedMail, PersonalReminderInput, ProfessorContact, ReminderDraft, SystemReminderInput};
 use crate::reminder_provider::{ReminderProvider, SystemReminderProvider};
 use rusqlite::Connection;
 use std::sync::Mutex;
@@ -141,8 +141,8 @@ fn resolve_sender_name(settings: &MailSettings, inferred: Option<String>) -> Str
 }
 
 #[tauri::command]
-fn translate_mail(text: String) -> Result<String, String> {
-    outgoing_mail::translate_english_to_chinese(&text)
+fn translate_mail(text: String, consent: bool) -> Result<String, String> {
+    outgoing_mail::translate_english_to_chinese(&text, consent)
 }
 
 #[tauri::command]
@@ -152,9 +152,14 @@ fn search_professors(query: String) -> Result<Vec<ProfessorContact>, String> {
 
 #[tauri::command]
 fn update_mail_category(state: State<AppState>, mail_id: String, category: String) -> Result<(), String> {
-    const VALID: &[&str] = &["待办","学业","校园事务","社团活动","实习","个人","外部"];
+    const VALID: &[&str] = &["学业","校园事务","社团活动","实习","个人","外部"];
     if !VALID.contains(&category.as_str()) { return Err("未知分类".into()); }
     db::update_category(&*state.db.lock().map_err(|_| "数据库锁异常")?, &mail_id, &category)
+}
+
+#[tauri::command]
+fn update_mail_todo(state: State<AppState>, mail_id: String, is_todo: bool) -> Result<(), String> {
+    db::update_todo(&*state.db.lock().map_err(|_| "数据库锁异常")?, &mail_id, is_todo)
 }
 
 #[tauri::command]
@@ -247,7 +252,7 @@ fn list_rules(state: State<AppState>) -> Result<Vec<ClassificationRule>, String>
 
 #[tauri::command]
 fn save_rule(state: State<AppState>, rule: ClassificationRule) -> Result<(), String> {
-    const CATEGORIES: &[&str] = &["待办","学业","校园事务","社团活动","实习","个人","外部"];
+    const CATEGORIES: &[&str] = &["学业","校园事务","社团活动","实习","个人","外部"];
     const FIELDS: &[&str] = &["sender","domain","subject","body"];
     const OPERATORS: &[&str] = &["contains","equals","regex"];
     if !CATEGORIES.contains(&rule.category.as_str()) || !FIELDS.contains(&rule.field.as_str()) || !OPERATORS.contains(&rule.operator.as_str()) || rule.value.trim().is_empty() { return Err("分类规则参数无效".into()); }
@@ -256,6 +261,16 @@ fn save_rule(state: State<AppState>, rule: ClassificationRule) -> Result<(), Str
 
 #[tauri::command]
 fn delete_rule(state: State<AppState>, rule_id: String) -> Result<(), String> { db::delete_rule(&*state.db.lock().map_err(|_| "数据库锁异常")?, &rule_id) }
+
+fn reclassify_existing_mails(connection: &Connection) -> Result<(), String> {
+    let rules = db::list_rules(connection)?;
+    for mail in db::list_mails(connection)?.into_iter().filter(|mail| mail.classification_reason != "手动分类") {
+        let parsed = ParsedMail { uid: mail.uid, sender_name: mail.sender_name, sender_email: mail.sender_email, recipients: mail.recipients, subject: mail.subject, received_at: mail.received_at, body_text: mail.body_text, is_read: mail.is_read };
+        let (category, reason) = classifier::classify(&parsed, &rules);
+        db::update_classification(connection, &mail.id, &category, &reason)?;
+    }
+    Ok(())
+}
 
 pub fn run() {
     tauri::Builder::default().plugin(tauri_plugin_opener::init()).setup(|app| {
@@ -266,14 +281,32 @@ pub fn run() {
             let entries = academic_calendar::parse_entries(academic_calendar::CURRENT_ENTRIES).map_err(std::io::Error::other)?;
             db::replace_academic_calendar(&mut connection, academic_calendar::CURRENT_SEMESTER, academic_calendar::CURRENT_SOURCE_URL, &entries).map_err(std::io::Error::other)?;
         }
+        reclassify_existing_mails(&connection).map_err(std::io::Error::other)?;
         app.manage(AppState { db: Mutex::new(connection) });
         Ok(())
-    }).invoke_handler(tauri::generate_handler![list_mails,save_mail_settings,test_mail_connection,sync_mail,send_mail,get_mail_identity,translate_mail,search_professors,update_mail_category,create_reminder,create_system_reminder,list_system_reminder_sources,list_calendar_events,save_personal_reminder,delete_personal_reminder,clear_local_data,list_rules,save_rule,delete_rule,save_ispace_calendar_url,list_assignments,sync_assignments,import_academic_calendar]).run(tauri::generate_context!()).expect("failed to run application");
+    }).invoke_handler(tauri::generate_handler![list_mails,save_mail_settings,test_mail_connection,sync_mail,send_mail,get_mail_identity,translate_mail,search_professors,update_mail_category,update_mail_todo,create_reminder,create_system_reminder,list_system_reminder_sources,list_calendar_events,save_personal_reminder,delete_personal_reminder,clear_local_data,list_rules,save_rule,delete_rule,save_ispace_calendar_url,list_assignments,sync_assignments,import_academic_calendar]).run(tauri::generate_context!()).expect("failed to run application");
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reclassifies_existing_automatic_mail_without_overwriting_manual_choice() {
+        let path = std::env::temp_dir().join(format!("mail-focus-reclassify-{}.sqlite", uuid::Uuid::new_v4()));
+        let db = db::open(&path).expect("open test database");
+        db.execute_batch("INSERT INTO mails(id,uid,sender_name,sender_email,subject,received_at,body_text,category,classification_reason)
+              VALUES('automatic',1,'CDC','career@bnbu.edu.cn','职业发展规划讲座','2026-09-03','学生职业发展中心','学业','关键词：课程');
+            INSERT INTO mails(id,uid,sender_name,sender_email,subject,received_at,body_text,category,classification_reason)
+              VALUES('manual',2,'CDC','career@bnbu.edu.cn','职业发展规划讲座','2026-09-03','学生职业发展中心','学业','手动分类');").expect("insert test mails");
+        reclassify_existing_mails(&db).expect("reclassify existing mail");
+        let automatic: String = db.query_row("SELECT category FROM mails WHERE id='automatic'", [], |row| row.get(0)).unwrap();
+        let manual: String = db.query_row("SELECT category FROM mails WHERE id='manual'", [], |row| row.get(0)).unwrap();
+        assert_eq!(automatic, "校园事务");
+        assert_eq!(manual, "学业");
+        drop(db);
+        let _ = std::fs::remove_file(path);
+    }
 
     #[test]
     fn uses_the_configured_display_name() {

@@ -2,12 +2,14 @@ import type { Category, ClassificationRule, MailMessage, ReminderDraft } from ".
 
 const defaults: Record<Exclude<Category, "外部">, string[]> = {
   "实习": ["实习", "实习生", "校招", "招聘", "简历", "internship", "intern position", "recruitment", "student assistant", "career opportunity", "job opening", "resume"],
-  "待办": ["请处理", "请完成", "待办", "action required", "deadline", "截止", "due date", "务必"],
   "学业": ["课程", "作业", "考试", "成绩", "课堂", "选课", "论文", "导师", "assignment", "course", "exam", "quiz", "lecture"],
-  "校园事务": ["教务", "校园", "宿舍", "图书馆", "注册", "缴费", "学生事务", "itsc", "校园卡", "系统通知"],
+  "校园事务": ["教务", "校园", "宿舍", "图书馆", "注册", "缴费", "学生事务", "itsc", "校园卡", "系统通知", "学生职业发展中心", "职业发展规划", "cdc宣讲会", "career development center", "career development centre", "一对一咨询项目", "创新中心", "创客中心", "入孵项目", "校赛", "项目打磨交流会"],
   "社团活动": ["社团", "活动", "招募", "志愿者", "比赛", "报名", "讲座", "工作坊", "club", "event", "workshop"],
   "个人": ["个人", "预约", "账单", "快递", "账户", "生日", "appointment", "personal"]
 };
+const campusEventPhrases = ["系列讲座", "dls lecture", "guest lecture", "datathon"];
+const personalItemPhrases = ["物品领取", "物品认领", "认领物品", "宿舍安全检查", "宿舍安全专项检查", "student hostel safety inspection"];
+const campusSenders = ["career@uic.edu.cn", "career@bnbu.edu.cn", "ic@bnbu.edu.cn"];
 
 function matches(rule: ClassificationRule, mail: MailMessage): boolean {
   if (!rule.enabled) return false;
@@ -25,6 +27,13 @@ export function classifyMail(mail: MailMessage, rules: ClassificationRule[] = []
   const rule = [...rules].sort((a, b) => b.priority - a.priority).find((item) => matches(item, mail));
   if (rule) return { category: rule.category, classificationReason: `规则：${rule.field} ${rule.operator} ${rule.value}` };
   const haystack = `${mail.subject}\n${mail.bodyText}`.toLowerCase();
+  const internship = defaults["实习"].find((item) => haystack.includes(item));
+  if (internship) return { category: "实习", classificationReason: `关键词：${internship}` };
+  const personalItem = personalItemPhrases.find((item) => haystack.includes(item));
+  if (personalItem) return { category: "个人", classificationReason: `关键词：${personalItem}` };
+  const campusEvent = campusEventPhrases.find((item) => haystack.includes(item));
+  if (campusEvent) return { category: "校园事务", classificationReason: `关键词：${campusEvent}` };
+  if (campusSenders.includes(mail.senderEmail.toLowerCase())) return { category: "校园事务", classificationReason: `校内来源：${mail.senderEmail}` };
   for (const [category, words] of Object.entries(defaults) as [Exclude<Category, "外部">, string[]][]) {
     const word = words.find((item) => haystack.includes(item.toLowerCase()));
     if (word) return { category, classificationReason: `关键词：${word}` };
@@ -64,7 +73,7 @@ export function createReminderDraft(mail: MailMessage): ReminderDraft {
     title: mail.subject.replace(/^(re|fw|fwd):\s*/i, "").slice(0, 120),
     notes: [`来自：${mail.senderName} <${mail.senderEmail}>`, actionable || mail.bodyText.slice(0, 280), `邮件时间：${new Date(mail.receivedAt).toLocaleString("zh-CN")}`].join("\n\n"),
     dueAt: extractDueDate(`${mail.subject}\n${mail.bodyText}`),
-    priority: mail.category === "待办" || mail.category === "学业" ? "high" : "normal",
+    priority: mail.isTodo || mail.category === "学业" ? "high" : "normal",
     sourceMailId: mail.id
   };
 }

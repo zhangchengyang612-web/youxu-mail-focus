@@ -10,7 +10,7 @@ pub fn open(path: &Path) -> Result<Connection, String> {
       CREATE TABLE IF NOT EXISTS mails (
         id TEXT PRIMARY KEY, uid INTEGER NOT NULL, folder TEXT NOT NULL DEFAULT 'INBOX', sender_name TEXT NOT NULL,
         sender_email TEXT NOT NULL, recipients TEXT NOT NULL DEFAULT '[]', subject TEXT NOT NULL, received_at TEXT NOT NULL,
-        body_text TEXT NOT NULL, category TEXT NOT NULL, classification_reason TEXT NOT NULL, is_read INTEGER NOT NULL DEFAULT 0,
+        body_text TEXT NOT NULL, category TEXT NOT NULL, classification_reason TEXT NOT NULL, is_todo INTEGER NOT NULL DEFAULT 0, is_read INTEGER NOT NULL DEFAULT 0,
         reminder_status TEXT NOT NULL DEFAULT 'none', UNIQUE(folder, uid));
       CREATE TABLE IF NOT EXISTS rules (
         id TEXT PRIMARY KEY, category TEXT NOT NULL, field TEXT NOT NULL, operator TEXT NOT NULL,
@@ -33,10 +33,22 @@ pub fn open(path: &Path) -> Result<Connection, String> {
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
       CREATE INDEX IF NOT EXISTS idx_mails_received ON mails(received_at DESC);")
       .map_err(|e| e.to_string())?;
+    let has_todo = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('mails') WHERE name='is_todo')",
+        [],
+        |row| row.get::<_, bool>(0),
+    ).map_err(|e| e.to_string())?;
+    if !has_todo {
+        connection.execute("ALTER TABLE mails ADD COLUMN is_todo INTEGER NOT NULL DEFAULT 0", []).map_err(|e| e.to_string())?;
+    }
     connection.execute_batch("UPDATE mails SET category = CASE category
       WHEN '会议' THEN '学业' WHEN '审批' THEN '校园事务' WHEN '财务' THEN '个人'
       WHEN '通知' THEN '校园事务' WHEN '其他' THEN '外部' ELSE category END;
-      DELETE FROM rules WHERE category IN ('会议','审批','财务','通知','其他');")
+      DELETE FROM rules WHERE category IN ('会议','审批','财务','通知','其他');
+      UPDATE mails SET category='外部', is_todo=CASE WHEN classification_reason='手动分类' THEN 1 ELSE 0 END,
+        classification_reason=CASE WHEN classification_reason='手动分类' THEN '手动分类' ELSE '待重新分类' END WHERE category='待办';
+      UPDATE mails SET is_todo=0, classification_reason='待重新分类' WHERE classification_reason='原待办分类已迁移为手动标签';
+      DELETE FROM rules WHERE category='待办';")
       .map_err(|e| e.to_string())?;
     let migrated: Option<String> = connection.query_row(
         "SELECT value FROM settings WHERE key='future_only_0_2_2'",
@@ -122,13 +134,21 @@ pub fn upsert_mail(db: &Connection, mail: &ParsedMail, category: &str, reason: &
 }
 
 pub fn list_mails(db: &Connection) -> Result<Vec<MailMessage>, String> {
-    let mut statement = db.prepare("SELECT id,uid,folder,sender_name,sender_email,recipients,subject,received_at,body_text,category,classification_reason,is_read,reminder_status FROM mails ORDER BY received_at DESC").map_err(|e| e.to_string())?;
-    let rows = statement.query_map([], |r| Ok(MailMessage { id:r.get(0)?, uid:r.get(1)?, folder:r.get(2)?, sender_name:r.get(3)?, sender_email:r.get(4)?, recipients:serde_json::from_str(&r.get::<_,String>(5)?).unwrap_or_default(), subject:r.get(6)?, received_at:r.get(7)?, body_text:crate::mail_provider::normalize_body_text(r.get(8)?), category:r.get(9)?, classification_reason:r.get(10)?, is_read:r.get::<_,i32>(11)? != 0, reminder_status:r.get(12)? })).map_err(|e| e.to_string())?;
+    let mut statement = db.prepare("SELECT id,uid,folder,sender_name,sender_email,recipients,subject,received_at,body_text,category,classification_reason,is_todo,is_read,reminder_status FROM mails ORDER BY received_at DESC").map_err(|e| e.to_string())?;
+    let rows = statement.query_map([], |r| Ok(MailMessage { id:r.get(0)?, uid:r.get(1)?, folder:r.get(2)?, sender_name:r.get(3)?, sender_email:r.get(4)?, recipients:serde_json::from_str(&r.get::<_,String>(5)?).unwrap_or_default(), subject:r.get(6)?, received_at:r.get(7)?, body_text:crate::mail_provider::normalize_body_text(r.get(8)?), category:r.get(9)?, classification_reason:r.get(10)?, is_todo:r.get::<_,i32>(11)? != 0, is_read:r.get::<_,i32>(12)? != 0, reminder_status:r.get(13)? })).map_err(|e| e.to_string())?;
     rows.collect::<Result<Vec<_>,_>>().map_err(|e| e.to_string())
 }
 
 pub fn update_category(db: &Connection, id: &str, category: &str) -> Result<(), String> {
     db.execute("UPDATE mails SET category=?1,classification_reason='手动分类' WHERE id=?2", params![category,id]).map_err(|e| e.to_string())?; Ok(())
+}
+
+pub fn update_todo(db: &Connection, id: &str, is_todo: bool) -> Result<(), String> {
+    db.execute("UPDATE mails SET is_todo=?1 WHERE id=?2", params![is_todo as i32,id]).map_err(|e| e.to_string())?; Ok(())
+}
+
+pub fn update_classification(db: &Connection, id: &str, category: &str, reason: &str) -> Result<(), String> {
+    db.execute("UPDATE mails SET category=?1,classification_reason=?2 WHERE id=?3", params![category,reason,id]).map_err(|e| e.to_string())?; Ok(())
 }
 
 pub fn list_rules(db: &Connection) -> Result<Vec<ClassificationRule>, String> {
@@ -227,6 +247,39 @@ pub fn clear(db: &Connection) -> Result<(), String> { db.execute_batch("DELETE F
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn migrates_and_updates_the_independent_todo_tag() {
+        let path = std::env::temp_dir().join(format!("mail-focus-todo-{}.sqlite", uuid::Uuid::new_v4()));
+        let legacy = Connection::open(&path).expect("open legacy database");
+        legacy.execute_batch("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            INSERT INTO settings(key,value) VALUES('future_only_0_2_2','1');
+            CREATE TABLE mails (
+              id TEXT PRIMARY KEY, uid INTEGER NOT NULL, folder TEXT NOT NULL DEFAULT 'INBOX', sender_name TEXT NOT NULL,
+              sender_email TEXT NOT NULL, recipients TEXT NOT NULL DEFAULT '[]', subject TEXT NOT NULL, received_at TEXT NOT NULL,
+              body_text TEXT NOT NULL, category TEXT NOT NULL, classification_reason TEXT NOT NULL, is_read INTEGER NOT NULL DEFAULT 0,
+              reminder_status TEXT NOT NULL DEFAULT 'none', UNIQUE(folder, uid));
+            INSERT INTO mails(id,uid,sender_name,sender_email,subject,received_at,body_text,category,classification_reason)
+              VALUES('todo-test',1,'A','a@example.com','请处理','2026-09-03','正文','待办','旧分类');
+            INSERT INTO mails(id,uid,sender_name,sender_email,subject,received_at,body_text,category,classification_reason)
+              VALUES('manual-todo',2,'B','b@example.com','人工待办','2026-09-02','正文','待办','手动分类');").expect("create legacy database");
+        drop(legacy);
+
+        let db = open(&path).expect("reopen migrated database");
+        let mails = list_mails(&db).expect("list migrated mail");
+        let mail = mails.iter().find(|mail| mail.id == "todo-test").unwrap();
+        let manual = mails.iter().find(|mail| mail.id == "manual-todo").unwrap();
+        assert_eq!(mail.category, "外部");
+        assert!(!mail.is_todo);
+        assert_eq!(manual.category, "外部");
+        assert!(manual.is_todo);
+        update_todo(&db, &mail.id, true).expect("add todo tag");
+        let updated = list_mails(&db).expect("list updated mail").into_iter().find(|mail| mail.id == "todo-test").unwrap();
+        assert_eq!(updated.category, "外部");
+        assert!(updated.is_todo);
+        drop(db);
+        let _ = std::fs::remove_file(path);
+    }
 
     #[test]
     fn infers_the_latest_formal_sender_name_for_the_connected_account() {

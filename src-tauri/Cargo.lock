@@ -4979,7 +4979,7 @@ dependencies = [
 
 [[package]]
 name = "wecom-mail-focus"
-version = "0.6.7"
+version = "0.6.8"
 dependencies = [
  "base64 0.22.1",
  "chrono",

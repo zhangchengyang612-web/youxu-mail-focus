@@ -1,4 +1,4 @@
-export const categories = ["待办", "学业", "校园事务", "社团活动", "实习", "个人", "外部"] as const;
+export const categories = ["学业", "校园事务", "社团活动", "实习", "个人", "外部"] as const;
 export type Category = (typeof categories)[number];
 
 export interface MailMessage {
@@ -12,6 +12,7 @@ export interface MailMessage {
   receivedAt: string;
   bodyText: string;
   category: Category;
+  isTodo: boolean;
   classificationReason: string;
   isRead: boolean;
   reminderStatus?: "none" | "draft" | "created" | "failed";

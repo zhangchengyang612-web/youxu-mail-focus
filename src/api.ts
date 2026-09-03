@@ -24,6 +24,9 @@ export const api = {
   async updateCategory(mailId: string, category: Category): Promise<void> {
     if (isTauri()) await invoke("update_mail_category", { mailId, category });
   },
+  async updateTodo(mailId: string, isTodo: boolean): Promise<void> {
+    if (isTauri()) await invoke("update_mail_todo", { mailId, isTodo });
+  },
   async createReminder(draft: ReminderDraft): Promise<string> {
     if (!isTauri()) {
       await new Promise((r) => setTimeout(r, 500));
@@ -105,7 +108,7 @@ export const api = {
   },
   async translateMail(text: string): Promise<string> {
     if (!isTauri()) { await new Promise((resolve) => setTimeout(resolve, 500)); return "这是英文邮件的中文翻译预览。"; }
-    return invoke("translate_mail", { text });
+    return invoke("translate_mail", { text, consent: true });
   },
   async searchProfessors(query: string): Promise<ProfessorContact[]> {
     if (!isTauri()) return [{ name: "Prof. Weimin LIU", email: "weiminliu@bnbu.edu.cn", department: "BNBU 官网演示结果", sourceUrl: "https://www.bnbu.edu.cn/en/" }];

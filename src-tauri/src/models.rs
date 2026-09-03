@@ -25,7 +25,7 @@ pub struct MailMessage {
     pub id: String, pub uid: u32, pub folder: String, pub sender_name: String,
     pub sender_email: String, pub recipients: Vec<String>, pub subject: String,
     pub received_at: String, pub body_text: String, pub category: String,
-    pub classification_reason: String, pub is_read: bool, pub reminder_status: String,
+    pub classification_reason: String, pub is_todo: bool, pub is_read: bool, pub reminder_status: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
