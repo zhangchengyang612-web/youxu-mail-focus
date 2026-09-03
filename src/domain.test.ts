@@ -7,6 +7,7 @@ const mail: MailMessage = { id: "1", uid: 1, folder: "INBOX", senderName: "课�
 describe("classification", () => {
   it("uses custom rules before built-ins", () => expect(classifyMail(mail, [{ id: "r", category: "校园事务", field: "sender", operator: "contains", value: "bnbu", priority: 99, enabled: true }]).category).toBe("校园事务"));
   it("uses built-in keywords", () => expect(classifyMail(mail).category).toBe("学业"));
+  it("classifies internship before a generic deadline", () => expect(classifyMail({ ...mail, subject: "Summer internship application deadline", bodyText: "Submit your resume by Friday" }).category).toBe("实习"));
 });
 
 describe("reminder extraction", () => {

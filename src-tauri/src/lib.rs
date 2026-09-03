@@ -1,12 +1,14 @@
+mod academic_calendar;
 mod classifier;
 mod db;
 mod ispace_provider;
 mod mail_provider;
 mod models;
+mod outgoing_mail;
 mod reminder_provider;
 
 use crate::mail_provider::{ImapMailProvider, MailProvider};
-use crate::models::{AssignmentDeadline, CalendarEvent, ClassificationRule, MailMessage, MailSettings, PersonalReminderInput, ReminderDraft, SystemReminderInput};
+use crate::models::{AcademicCalendarImport, AssignmentDeadline, CalendarEvent, ClassificationRule, MailIdentity, MailMessage, MailSettings, OutgoingMail, PersonalReminderInput, ProfessorContact, ReminderDraft, SystemReminderInput};
 use crate::reminder_provider::{ReminderProvider, SystemReminderProvider};
 use rusqlite::Connection;
 use std::sync::Mutex;
@@ -112,8 +114,45 @@ fn sync_mail(state: State<AppState>) -> Result<usize, String> {
 }
 
 #[tauri::command]
+fn send_mail(state: State<AppState>, outgoing: OutgoingMail) -> Result<String, String> {
+    let (settings, sender_name) = {
+        let connection = state.db.lock().map_err(|_| "数据库锁异常")?;
+        let settings = db::load_settings(&connection)?;
+        let inferred = db::infer_sender_name(&connection, settings.email.trim())?;
+        let name = resolve_sender_name(&settings, inferred);
+        (settings, name)
+    };
+    let password = load_secret(PASSWORD_SERVICE, settings.email.trim())?;
+    outgoing_mail::send(&settings, &sender_name, &password, outgoing)
+}
+
+#[tauri::command]
+fn get_mail_identity(state: State<AppState>) -> Result<MailIdentity, String> {
+    let connection = state.db.lock().map_err(|_| "数据库锁异常")?;
+    let settings = db::load_settings(&connection)?;
+    let inferred = db::infer_sender_name(&connection, settings.email.trim())?;
+    let display_name = resolve_sender_name(&settings, inferred);
+    Ok(MailIdentity { email: settings.email, display_name })
+}
+
+fn resolve_sender_name(settings: &MailSettings, inferred: Option<String>) -> String {
+    if !settings.sender_name.trim().is_empty() { return settings.sender_name.trim().into(); }
+    inferred.unwrap_or_else(|| settings.email.split('@').next().unwrap_or_default().to_string())
+}
+
+#[tauri::command]
+fn translate_mail(text: String) -> Result<String, String> {
+    outgoing_mail::translate_english_to_chinese(&text)
+}
+
+#[tauri::command]
+fn search_professors(query: String) -> Result<Vec<ProfessorContact>, String> {
+    outgoing_mail::search_professors(&query)
+}
+
+#[tauri::command]
 fn update_mail_category(state: State<AppState>, mail_id: String, category: String) -> Result<(), String> {
-    const VALID: &[&str] = &["待办","学业","校园事务","社团活动","个人","外部"];
+    const VALID: &[&str] = &["待办","学业","校园事务","社团活动","实习","个人","外部"];
     if !VALID.contains(&category.as_str()) { return Err("未知分类".into()); }
     db::update_category(&*state.db.lock().map_err(|_| "数据库锁异常")?, &mail_id, &category)
 }
@@ -194,11 +233,21 @@ fn sync_assignments(state: State<AppState>) -> Result<usize, String> {
 }
 
 #[tauri::command]
+fn import_academic_calendar(state: State<AppState>, input: AcademicCalendarImport) -> Result<usize, String> {
+    let semester = input.semester.trim();
+    if semester.is_empty() || semester.chars().count() > 80 { return Err("请填写有效的学期名称".into()); }
+    academic_calendar::validate_source_url(&input.source_url)?;
+    let entries = academic_calendar::parse_entries(&input.entries)?;
+    db::replace_academic_calendar(&mut *state.db.lock().map_err(|_| "数据库锁异常")?, semester, input.source_url.trim(), &entries)?;
+    Ok(entries.len())
+}
+
+#[tauri::command]
 fn list_rules(state: State<AppState>) -> Result<Vec<ClassificationRule>, String> { db::list_rules(&*state.db.lock().map_err(|_| "数据库锁异常")?) }
 
 #[tauri::command]
 fn save_rule(state: State<AppState>, rule: ClassificationRule) -> Result<(), String> {
-    const CATEGORIES: &[&str] = &["待办","学业","校园事务","社团活动","个人","外部"];
+    const CATEGORIES: &[&str] = &["待办","学业","校园事务","社团活动","实习","个人","外部"];
     const FIELDS: &[&str] = &["sender","domain","subject","body"];
     const OPERATORS: &[&str] = &["contains","equals","regex"];
     if !CATEGORIES.contains(&rule.category.as_str()) || !FIELDS.contains(&rule.field.as_str()) || !OPERATORS.contains(&rule.operator.as_str()) || rule.value.trim().is_empty() { return Err("分类规则参数无效".into()); }
@@ -212,7 +261,23 @@ pub fn run() {
     tauri::Builder::default().plugin(tauri_plugin_opener::init()).setup(|app| {
         let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
         std::fs::create_dir_all(&data_dir)?;
-        app.manage(AppState { db: Mutex::new(db::open(&data_dir.join("mail-focus.sqlite")).map_err(std::io::Error::other)?) });
+        let mut connection = db::open(&data_dir.join("mail-focus.sqlite")).map_err(std::io::Error::other)?;
+        if db::academic_calendar_is_empty(&connection).map_err(std::io::Error::other)? {
+            let entries = academic_calendar::parse_entries(academic_calendar::CURRENT_ENTRIES).map_err(std::io::Error::other)?;
+            db::replace_academic_calendar(&mut connection, academic_calendar::CURRENT_SEMESTER, academic_calendar::CURRENT_SOURCE_URL, &entries).map_err(std::io::Error::other)?;
+        }
+        app.manage(AppState { db: Mutex::new(connection) });
         Ok(())
-    }).invoke_handler(tauri::generate_handler![list_mails,save_mail_settings,test_mail_connection,sync_mail,update_mail_category,create_reminder,create_system_reminder,list_system_reminder_sources,list_calendar_events,save_personal_reminder,delete_personal_reminder,clear_local_data,list_rules,save_rule,delete_rule,save_ispace_calendar_url,list_assignments,sync_assignments]).run(tauri::generate_context!()).expect("failed to run application");
+    }).invoke_handler(tauri::generate_handler![list_mails,save_mail_settings,test_mail_connection,sync_mail,send_mail,get_mail_identity,translate_mail,search_professors,update_mail_category,create_reminder,create_system_reminder,list_system_reminder_sources,list_calendar_events,save_personal_reminder,delete_personal_reminder,clear_local_data,list_rules,save_rule,delete_rule,save_ispace_calendar_url,list_assignments,sync_assignments,import_academic_calendar]).run(tauri::generate_context!()).expect("failed to run application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn uses_the_configured_display_name() {
+        let settings = MailSettings { host: "imap.exmail.qq.com".into(), port: 993, email: "student@example.edu".into(), sender_name: "Student Name".into(), initial_days: 0, sync_minutes: 5 };
+        assert_eq!(resolve_sender_name(&settings, None), "Student Name");
+    }
 }

@@ -2,7 +2,22 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct MailSettings { pub host: String, pub port: u16, pub email: String, pub initial_days: u32, pub sync_minutes: u32 }
+pub struct MailSettings {
+    pub host: String,
+    pub port: u16,
+    pub email: String,
+    #[serde(default)]
+    pub sender_name: String,
+    pub initial_days: u32,
+    pub sync_minutes: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MailIdentity {
+    pub email: String,
+    pub display_name: String,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -74,4 +89,41 @@ pub struct SystemReminderInput {
     pub notes: String,
     pub due_at: String,
     pub priority: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcademicCalendarImport {
+    pub semester: String,
+    pub source_url: String,
+    pub entries: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OutgoingAttachment {
+    pub name: String,
+    pub mime_type: String,
+    pub data_base64: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OutgoingMail {
+    pub to: Vec<String>,
+    pub cc: Vec<String>,
+    pub bcc: Vec<String>,
+    pub subject: String,
+    pub text_body: String,
+    pub html_body: String,
+    pub attachments: Vec<OutgoingAttachment>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfessorContact {
+    pub name: String,
+    pub email: String,
+    pub department: String,
+    pub source_url: String,
 }

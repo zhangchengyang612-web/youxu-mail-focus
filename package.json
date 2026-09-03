@@ -1,7 +1,7 @@
 {
   "name": "wecom-mail-focus",
   "private": true,
-  "version": "0.4.5",
+  "version": "0.6.7",
   "type": "module",
   "scripts": {
     "dev": "vite",

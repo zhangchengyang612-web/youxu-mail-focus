@@ -1,6 +1,7 @@
 import type { Category, ClassificationRule, MailMessage, ReminderDraft } from "./types";
 
 const defaults: Record<Exclude<Category, "外部">, string[]> = {
+  "实习": ["实习", "实习生", "校招", "招聘", "简历", "internship", "intern position", "recruitment", "student assistant", "career opportunity", "job opening", "resume"],
   "待办": ["请处理", "请完成", "待办", "action required", "deadline", "截止", "due date", "务必"],
   "学业": ["课程", "作业", "考试", "成绩", "课堂", "选课", "论文", "导师", "assignment", "course", "exam", "quiz", "lecture"],
   "校园事务": ["教务", "校园", "宿舍", "图书馆", "注册", "缴费", "学生事务", "itsc", "校园卡", "系统通知"],

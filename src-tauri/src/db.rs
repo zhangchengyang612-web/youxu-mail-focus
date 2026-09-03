@@ -1,3 +1,4 @@
+use crate::academic_calendar::AcademicCalendarEntry;
 use crate::models::{AssignmentDeadline, CalendarEvent, ClassificationRule, MailMessage, MailSettings, ParsedMail, PersonalReminderInput, ReminderDraft};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::Path;
@@ -63,6 +64,15 @@ pub fn save_settings(db: &Connection, settings: &MailSettings) -> Result<(), Str
 pub fn load_settings(db: &Connection) -> Result<MailSettings, String> {
     let value: Option<String> = db.query_row("SELECT value FROM settings WHERE key='mail'", [], |r| r.get(0)).optional().map_err(|e| e.to_string())?;
     value.ok_or_else(|| "请先在设置中连接 BNBU 学生邮箱".to_string()).and_then(|v| serde_json::from_str(&v).map_err(|e| e.to_string()))
+}
+
+pub fn infer_sender_name(db: &Connection, email: &str) -> Result<Option<String>, String> {
+    let local_part = email.split('@').next().unwrap_or_default();
+    db.query_row(
+        "SELECT sender_name FROM mails WHERE lower(sender_email)=lower(?1) AND trim(sender_name)<>'' AND lower(trim(sender_name)) NOT IN (lower(?1),lower(?2)) ORDER BY received_at DESC LIMIT 1",
+        params![email, local_part],
+        |row| row.get(0),
+    ).optional().map_err(|error| error.to_string())
 }
 
 pub fn load_sync_cursor(db: &Connection) -> Result<Option<u32>, String> {
@@ -177,6 +187,22 @@ pub fn list_calendar_events(db: &Connection) -> Result<Vec<CalendarEvent>, Strin
     rows.collect::<Result<Vec<_>,_>>().map_err(|e| e.to_string())
 }
 
+pub fn academic_calendar_is_empty(db: &Connection) -> Result<bool, String> {
+    let count: i64 = db.query_row("SELECT COUNT(*) FROM calendar_events WHERE kind='academic'", [], |row| row.get(0)).map_err(|e| e.to_string())?;
+    Ok(count == 0)
+}
+
+pub fn replace_academic_calendar(db: &mut Connection, semester: &str, source_url: &str, entries: &[AcademicCalendarEntry]) -> Result<(), String> {
+    let transaction = db.transaction().map_err(|e| e.to_string())?;
+    transaction.execute("DELETE FROM calendar_events WHERE kind='academic' AND source_id=?1", [semester]).map_err(|e| e.to_string())?;
+    for (index, entry) in entries.iter().enumerate() {
+        transaction.execute("INSERT INTO calendar_events(id,title,notes,starts_at,priority,kind,source_id,source_url,read_only,updated_at)
+          VALUES(?1,?2,?3,?4,'normal','academic',?5,?6,1,datetime('now'))",
+          params![format!("academic:{semester}:{}:{index}", entry.starts_at), entry.title, semester, entry.starts_at, semester, source_url]).map_err(|e| e.to_string())?;
+    }
+    transaction.commit().map_err(|e| e.to_string())
+}
+
 pub fn save_personal_event(db: &Connection, input: &PersonalReminderInput) -> Result<CalendarEvent, String> {
     let id = input.id.clone().unwrap_or_else(|| format!("personal:{}", uuid::Uuid::new_v4()));
     db.execute("INSERT INTO calendar_events(id,title,notes,starts_at,priority,kind,read_only,updated_at)
@@ -203,6 +229,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn infers_the_latest_formal_sender_name_for_the_connected_account() {
+        let path = std::env::temp_dir().join(format!("mail-focus-identity-{}.sqlite", uuid::Uuid::new_v4()));
+        let db = open(&path).expect("open test database");
+        db.execute(
+            "INSERT INTO mails(id,uid,sender_name,sender_email,subject,received_at,body_text,category,classification_reason) VALUES(?1,?2,?3,?4,'测试','2026-08-31T12:00:00+08:00','正文','个人','测试')",
+            params!["identity-test", 1, "Student Name", "student@example.edu"],
+        ).expect("insert self mail");
+        db.execute(
+            "INSERT INTO mails(id,uid,sender_name,sender_email,subject,received_at,body_text,category,classification_reason) VALUES(?1,?2,?3,?4,'App 测试','2026-08-31T21:55:00+08:00','正文','个人','测试')",
+            params!["identity-local-part", 2, "student", "student@example.edu"],
+        ).expect("insert newer app mail");
+        assert_eq!(infer_sender_name(&db, "student@example.edu").unwrap(), Some("Student Name".into()));
+        drop(db);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn saves_updates_and_deletes_personal_calendar_events() {
         let path = std::env::temp_dir().join(format!("mail-focus-calendar-{}.sqlite", uuid::Uuid::new_v4()));
         let db = open(&path).expect("open test database");
@@ -220,6 +263,22 @@ mod tests {
         save_system_reminder_link(&db, "personal:test", "apple-reminders", "external-1").expect("save system reminder link");
         assert!(system_reminder_exists(&db, "personal:test").expect("check saved system reminder"));
         assert_eq!(list_system_reminder_sources(&db).expect("list sources"), vec!["personal:test"]);
+        drop(db);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn replaces_only_the_selected_academic_semester() {
+        let path = std::env::temp_dir().join(format!("mail-focus-academic-{}.sqlite", uuid::Uuid::new_v4()));
+        let mut db = open(&path).expect("open test database");
+        let first = vec![AcademicCalendarEntry { title: "开学".into(), starts_at: "2026-09-01T09:00:00+08:00".into() }];
+        replace_academic_calendar(&mut db, "2026-27 第一学期", "https://ar.bnbu.edu.cn/calendar.pdf", &first).expect("import term");
+        assert!(!academic_calendar_is_empty(&db).unwrap());
+        let updated = vec![AcademicCalendarEntry { title: "更新后的开学日".into(), starts_at: "2026-09-02T09:00:00+08:00".into() }];
+        replace_academic_calendar(&mut db, "2026-27 第一学期", "https://ar.bnbu.edu.cn/calendar.pdf", &updated).expect("replace term");
+        let events = list_calendar_events(&db).unwrap().into_iter().filter(|item| item.kind == "academic").collect::<Vec<_>>();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].title, "更新后的开学日");
         drop(db);
         let _ = std::fs::remove_file(path);
     }

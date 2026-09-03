@@ -1,13 +1,38 @@
-import { useEffect, useMemo, useState } from "react";
-import { Bell, BookOpen, Building2, CalendarClock, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, Clock3, Copy, Globe2, GraduationCap, Inbox, ListTodo, Menu, MoreHorizontal, PartyPopper, Pencil, Plus, RefreshCw, Search, Settings, ShieldCheck, SlidersHorizontal, Sparkles, Trash2, UserRound, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { AtSign, Bell, Bold, BookMarked, BookOpen, BriefcaseBusiness, Building2, CalendarClock, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, Clock3, Copy, ExternalLink, FileText, Globe2, GraduationCap, Inbox, Italic, List, ListTodo, MailPlus, Menu, MoreHorizontal, Paperclip, PartyPopper, Pencil, Plus, RefreshCw, Reply, Save, Search, Send, Settings, ShieldCheck, SlidersHorizontal, Smile, Sparkles, Trash2, Underline, UserRound, Users, X } from "lucide-react";
 import { api } from "./api";
 import { buildMonthGrid, createReminderDraft, localDateKey, summarizeMail } from "./domain";
-import { categories, type AssignmentDeadline, type CalendarEvent, type Category, type ClassificationRule, type MailMessage, type MailSettings, type PersonalReminderInput, type ReminderDraft, type SystemReminderInput } from "./types";
+import { categories, type AcademicCalendarImport, type AssignmentDeadline, type CalendarEvent, type Category, type ClassificationRule, type MailMessage, type MailSettings, type OutgoingAttachment, type OutgoingMail, type PersonalReminderInput, type ProfessorContact, type ReminderDraft, type SystemReminderInput } from "./types";
 
-const icons: Record<Category | "全部邮件", typeof Inbox> = { "全部邮件": Inbox, "待办": ListTodo, "学业": BookOpen, "校园事务": Building2, "社团活动": PartyPopper, "个人": UserRound, "外部": Globe2 };
-const colors: Record<Category, string> = { "待办": "coral", "学业": "violet", "校园事务": "amber", "社团活动": "green", "个人": "blue", "外部": "gray" };
+const icons: Record<Category | "全部邮件", typeof Inbox> = { "全部邮件": Inbox, "待办": ListTodo, "学业": BookOpen, "校园事务": Building2, "社团活动": PartyPopper, "实习": BriefcaseBusiness, "个人": UserRound, "外部": Globe2 };
+const colors: Record<Category, string> = { "待办": "coral", "学业": "violet", "校园事务": "amber", "社团活动": "green", "实习": "teal", "个人": "blue", "外部": "gray" };
 
-const defaultSettings: MailSettings = { host: "imap.exmail.qq.com", port: 993, email: "", initialDays: 0, syncMinutes: 5 };
+const defaultSettings: MailSettings = { host: "imap.exmail.qq.com", port: 993, email: "", senderName: "", initialDays: 0, syncMinutes: 5 };
+const defaultAcademicCalendar: AcademicCalendarImport = {
+  semester: "2026-27 第一学期",
+  sourceUrl: "https://ar.bnbu.edu.cn/attachment/file/Academic_Calendar_for_S1_AY202627.pdf",
+  entries: `2026-08-18 | 暑期学期结束（2025-26）
+2026-08-23~2026-08-24 | 大一新生注册
+2026-08-25~2026-08-31 | 新生迎新与英语强化课程
+2026-09-01 | 第一学期开始 / 正式上课
+2026-09-01~2026-09-14 | 选课增删期
+2026-09-20 | 补星期五课程 / 全体教职员上班
+2026-09-25~2026-09-27 | 中秋节假期
+2026-10-01~2026-10-07 | 国庆节假期
+2026-10-10 | 补星期一课程 / 全体教职员上班
+2026-10-25~2026-10-31 | 阅读周
+2026-12-11 | 第一学期最后上课日
+2026-12-12 | 全国大学英语考试预留日
+2026-12-13~2026-12-15 | 期末考试复习
+2026-12-16~2026-12-27 | 第一学期期末考试
+2026-12-28~2026-12-31 | 大一学生军训
+2027-01-01 | 元旦假期
+2027-01-02~2027-01-11 | 大一学生军训
+2027-01-06 | 学部委员会会议
+2027-01-08 | 校教务议会会议
+2027-01-11 | 成绩发布 / 第一学期结束
+2027-01-24~2027-01-31 | 春节假期（学校关闭）`,
+};
 
 export default function App() {
   const [mails, setMails] = useState<MailMessage[]>([]);
@@ -26,9 +51,15 @@ export default function App() {
   const [assignments, setAssignments] = useState<AssignmentDeadline[]>([]);
   const [ispaceStatus, setIspaceStatus] = useState("正在读取本地 DDL…");
   const [showIspaceSettings, setShowIspaceSettings] = useState(false);
+  const [showAcademicImport, setShowAcademicImport] = useState(false);
   const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([]);
   const [personalDraft, setPersonalDraft] = useState<PersonalReminderInput | null>(null);
   const [systemReminderSources, setSystemReminderSources] = useState<string[]>([]);
+  const [composeInitial, setComposeInitial] = useState<{ to?: string; subject?: string; body?: string } | null>(null);
+  const [showProfessorSearch, setShowProfessorSearch] = useState(false);
+  const [translations, setTranslations] = useState<Record<string, string>>({});
+  const [translatingId, setTranslatingId] = useState<string | null>(null);
+  const [translationErrors, setTranslationErrors] = useState<Record<string, string>>({});
 
   useEffect(() => {
     api.listMails().then((items) => { setMails(items); setSelectedId(items[0]?.id ?? null); setStatus("本地数据已就绪"); });
@@ -77,7 +108,7 @@ export default function App() {
   return <div className="app-shell">
     <aside className="sidebar">
       <div className="brand"><div className="brand-mark"><Sparkles size={18}/></div><div><strong>邮序</strong><span>MAIL FOCUS</span></div></div>
-      <button className="compose" onClick={openReminder}><Bell size={17}/>创建提醒</button>
+      <button className="compose" onClick={() => setComposeInitial({})}><MailPlus size={17}/>写邮件</button>
       <nav>
         <p className="nav-label">邮件</p>
         {(["全部邮件", ...categories] as const).map((item) => { const Icon = icons[item]; const count = item === "全部邮件" ? mails.length : mails.filter((mail) => mail.category === item).length; return <button key={item} className={view === "mail" && category === item ? "nav-item active" : "nav-item"} onClick={() => { setView("mail"); setCategory(item); }}><Icon size={17}/><span>{item}</span><em>{count}</em></button>; })}
@@ -86,8 +117,9 @@ export default function App() {
         <p className="nav-label nav-space">规划</p>
         <button className={view === "calendar" ? "nav-item active" : "nav-item"} onClick={() => setView("calendar")}><CalendarDays size={17}/><span>统一日历</span><em>{assignments.length + calendarEvents.length}</em></button>
       </nav>
-      <div className="privacy"><ShieldCheck size={18}/><div><strong>数据仅存本机</strong><span>正文不会上传云端</span></div></div>
+      <div className="privacy"><ShieldCheck size={18}/><div><strong>默认仅存本机</strong><span>翻译时会明确提示</span></div></div>
       <button className="settings-button" onClick={() => setShowRules(true)}><SlidersHorizontal size={17}/>分类规则</button>
+      <button className="settings-button" onClick={() => setShowProfessorSearch(true)}><Users size={17}/>教授邮箱</button>
       <button className="settings-button" onClick={() => setShowIspaceSettings(true)}><GraduationCap size={17}/>连接 iSpace</button>
       <button className="settings-button" onClick={() => setShowSettings(true)}><Settings size={17}/>设置</button>
     </aside>
@@ -97,10 +129,10 @@ export default function App() {
         <div className="mobile-menu"><Menu/></div>
         <div className="search"><Search size={17}/><input aria-label="搜索" placeholder={view === "assignments" ? "搜索课程或作业…" : view === "calendar" ? "搜索日历事件…" : "搜索发件人、主题或正文…"} value={query} onChange={(e) => setQuery(e.target.value)}/><kbd>⌘ K</kbd></div>
         <button className="icon-button" onClick={view === "assignments" ? syncIspace : sync} title={view === "assignments" ? "同步 iSpace 作业" : "同步邮件与 iSpace"}><RefreshCw size={18} className={syncing ? "spin" : ""}/></button>
-        <div className="avatar">CY</div>
+        <div className="avatar">我</div>
       </header>
       <div className="content">
-        {view === "assignments" ? <AssignmentBoard assignments={assignments} status={ispaceStatus} query={query} syncing={syncing} onSync={syncIspace} onSetup={() => setShowIspaceSettings(true)} onToast={setToast}/> : view === "calendar" ? <CalendarBoard assignments={assignments} events={calendarEvents} query={query} systemReminderSources={systemReminderSources} onImportSystem={importSystemReminder} onAdd={setPersonalDraft} onEdit={setPersonalDraft} onDelete={async (id) => { await api.deletePersonalReminder(id); await refreshCalendar(); setToast("个人提醒已删除"); }}/> : <>
+        {view === "assignments" ? <AssignmentBoard assignments={assignments} status={ispaceStatus} query={query} syncing={syncing} onSync={syncIspace} onSetup={() => setShowIspaceSettings(true)} onToast={setToast}/> : view === "calendar" ? <CalendarBoard assignments={assignments} events={calendarEvents} query={query} systemReminderSources={systemReminderSources} onImportSystem={importSystemReminder} onImportAcademic={() => setShowAcademicImport(true)} onAdd={setPersonalDraft} onEdit={setPersonalDraft} onDelete={async (id) => { await api.deletePersonalReminder(id); await refreshCalendar(); setToast("个人提醒已删除"); }}/> : <>
         <section className="mail-column">
           <div className="list-heading"><div><h1>{category}</h1><p>{status}</p></div><button className="filter">最新优先 <ChevronDown size={14}/></button></div>
           {checked.size > 0 && <div className="selection-bar"><span>已选择 {checked.size} 封</span><button onClick={openReminder}><Bell size={14}/>生成提醒</button><button className="plain" onClick={() => setChecked(new Set())}>取消</button></div>}
@@ -111,8 +143,8 @@ export default function App() {
         </section>
 
         <section className="detail-column">{selected ? <>
-          <div className="detail-toolbar"><button onClick={openReminder}><Bell size={16}/>生成提醒</button><button className="icon-button"><MoreHorizontal size={18}/></button></div>
-          <article className="mail-detail"><span className={`tag ${colors[selected.category]}`}>{selected.category}</span><h2>{selected.subject}</h2><div className="sender-row"><div className="sender-avatar">{selected.senderName.slice(0, 1)}</div><div><strong>{selected.senderName}</strong><span>{selected.senderEmail}</span></div><time>{new Date(selected.receivedAt).toLocaleString("zh-CN")}</time></div><section className="mail-summary"><div className="summary-heading"><div><span>本地邮件摘要</span><strong>重点内容</strong></div><button onClick={() => setExpandedMails((old) => { const next = new Set(old); next.has(selected.id) ? next.delete(selected.id) : next.add(selected.id); return next; })}>{expandedMails.has(selected.id) ? "收起" : "展开"}</button></div><p>{summarizeMail(selected)}</p></section>{expandedMails.has(selected.id) && <div className="message-body"><div className="full-mail-label">完整邮件内容</div>{selected.bodyText.split("\n").map((line, i) => <p key={i}>{line || <br/>}</p>)}</div>}
+          <div className="detail-toolbar"><button className="reply-button" onClick={() => setComposeInitial({ to: selected.senderEmail, subject: selected.subject.startsWith("Re:") ? selected.subject : `Re: ${selected.subject}`, body: `\n\n—— 原始邮件 ——\n发件人：${selected.senderName} <${selected.senderEmail}>\n时间：${new Date(selected.receivedAt).toLocaleString("zh-CN")}\n主题：${selected.subject}\n\n${selected.bodyText}` })}><Reply size={16}/>回复</button><button onClick={openReminder}><Bell size={16}/>生成提醒</button><button className="icon-button"><MoreHorizontal size={18}/></button></div>
+          <article className="mail-detail"><span className={`tag ${colors[selected.category]}`}>{selected.category}</span><h2>{selected.subject}</h2><div className="sender-row"><div className="sender-avatar">{selected.senderName.slice(0, 1)}</div><div><strong>{selected.senderName}</strong><span>{selected.senderEmail}</span></div><time>{new Date(selected.receivedAt).toLocaleString("zh-CN")}</time></div><section className="mail-summary"><div className="summary-heading"><div><span>本地邮件摘要</span><strong>重点内容</strong></div><button onClick={() => setExpandedMails((old) => { const next = new Set(old); next.has(selected.id) ? next.delete(selected.id) : next.add(selected.id); return next; })}>{expandedMails.has(selected.id) ? "收起" : "展开"}</button></div><p>{summarizeMail(selected)}</p></section>{isLikelyEnglish(`${selected.subject}\n${selected.bodyText}`) && <section className="mail-translation"><div><span>英文邮件</span><strong>中文翻译</strong><small>点击后正文将发送到 MyMemory 翻译服务</small></div><button disabled={translatingId === selected.id} onClick={async () => { setTranslatingId(selected.id); setTranslationErrors((current) => ({ ...current, [selected.id]: "" })); try { const translation = await api.translateMail(selected.bodyText); setTranslations((current) => ({ ...current, [selected.id]: translation })); } catch (reason) { setTranslationErrors((current) => ({ ...current, [selected.id]: String(reason) })); } finally { setTranslatingId(null); } }}>{translatingId === selected.id ? "翻译中…" : translations[selected.id] ? "重新翻译" : "翻译为中文"}</button>{translations[selected.id] && <p>{translations[selected.id]}</p>}{translationErrors[selected.id] && <p className="translation-error">{translationErrors[selected.id]}</p>}</section>}{expandedMails.has(selected.id) && <div className="message-body"><div className="full-mail-label">完整邮件内容</div>{selected.bodyText.split("\n").map((line, i) => <p key={i}>{line || <br/>}</p>)}</div>}
           <div className="classification"><Sparkles size={17}/><div><strong>本地智能分类</strong><span>{selected.classificationReason}</span></div><select value={selected.category} onChange={(e) => changeCategory(e.target.value as Category)}>{categories.map((item) => <option key={item}>{item}</option>)}</select></div></article>
         </> : <div className="empty">选择一封邮件查看详情</div>}</section>
         </>}
@@ -120,14 +152,90 @@ export default function App() {
     </main>
     {showSettings && <SettingsModal onClose={() => setShowSettings(false)} onToast={setToast} onSaved={sync}/>} 
     {showIspaceSettings && <IspaceSettingsModal onClose={() => setShowIspaceSettings(false)} onToast={setToast} onSaved={syncIspace}/>} 
+    {showAcademicImport && <AcademicCalendarModal
+      onClose={() => setShowAcademicImport(false)}
+      onSaved={async (count) => { await refreshCalendar(); setShowAcademicImport(false); setToast(`已导入 ${count} 个校历日期`); }}
+    />}
     {showRules && <RulesModal onClose={() => setShowRules(false)} onToast={setToast}/>} 
     {draft && <ReminderModal draft={draft} onClose={() => setDraft(null)} onCreated={async (mailId) => { setMails((old) => old.map((m) => m.id === mailId ? {...m, reminderStatus: "created"} : m)); setChecked(new Set()); setDraft(null); await refreshCalendar(); setToast("提醒已创建并加入日历"); }}/>} 
     {personalDraft && <PersonalReminderModal initial={personalDraft} onClose={() => setPersonalDraft(null)} onSaved={async (saved, imported) => { await refreshCalendar(); if (imported) setSystemReminderSources((old) => old.includes(saved.id) ? old : [...old, saved.id]); setPersonalDraft(null); setToast(imported ? "已保存并加入电脑提醒事项" : "个人提醒已保存到日历"); }}/>} 
+    {composeInitial && <ComposeMailModal
+      initial={composeInitial}
+      onClose={() => setComposeInitial(null)}
+      onSent={(message) => { setComposeInitial(null); setToast(message); }}
+    />}
+    {showProfessorSearch && <ProfessorSearchModal
+      onClose={() => setShowProfessorSearch(false)}
+      onCompose={(email) => { setShowProfessorSearch(false); setComposeInitial({ to: email }); }}
+      onToast={setToast}
+    />}
     {toast && <div className="toast" onAnimationEnd={() => setToast(null)}><Check size={16}/>{toast}</div>}
   </div>;
 }
 
-function CalendarBoard({ assignments, events, query, systemReminderSources, onImportSystem, onAdd, onEdit, onDelete }: { assignments: AssignmentDeadline[]; events: CalendarEvent[]; query: string; systemReminderSources: string[]; onImportSystem: (input: SystemReminderInput) => Promise<void>; onAdd: (value: PersonalReminderInput) => void; onEdit: (value: PersonalReminderInput) => void; onDelete: (id: string) => Promise<void> }) {
+function ComposeMailModal({ initial, onClose, onSent }: { initial: { to?: string; subject?: string; body?: string }; onClose: () => void; onSent: (message: string) => void }) {
+  const [identity, setIdentity] = useState({ email: "尚未连接邮箱", displayName: "" });
+  const saved = useMemo<OutgoingMail | null>(() => { if (initial.to || initial.subject || initial.body) return null; try { return JSON.parse(localStorage.getItem("mail-compose-draft") ?? "null"); } catch { return null; } }, [initial]);
+  const [to, setTo] = useState(initial.to ?? saved?.to.join(", ") ?? "");
+  const [cc, setCc] = useState(saved?.cc.join(", ") ?? "");
+  const [bcc, setBcc] = useState(saved?.bcc.join(", ") ?? "");
+  const [showCopies, setShowCopies] = useState(Boolean(saved?.cc.length || saved?.bcc.length));
+  const [subject, setSubject] = useState(initial.subject ?? saved?.subject ?? "");
+  const [textBody, setTextBody] = useState(initial.body ?? saved?.textBody ?? "");
+  const [htmlBody, setHtmlBody] = useState(saved?.htmlBody ?? escapeMailBody(initial.body ?? ""));
+  const [attachments, setAttachments] = useState<OutgoingAttachment[]>(saved?.attachments ?? []);
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState("");
+  const [showEmoji, setShowEmoji] = useState(false);
+  const editor = useRef<HTMLDivElement>(null);
+  useEffect(() => { api.getMailIdentity().then(setIdentity).catch(() => undefined); }, []);
+  useEffect(() => { if (editor.current) editor.current.innerHTML = htmlBody || "<p><br></p>"; }, []);
+  const recipients = (value: string) => value.split(/[,;\n]+/).map((item) => item.trim()).filter(Boolean);
+  const payload = (): OutgoingMail => ({ to: recipients(to), cc: recipients(cc), bcc: recipients(bcc), subject, textBody, htmlBody, attachments });
+  const saveDraft = () => { localStorage.setItem("mail-compose-draft", JSON.stringify(payload())); setError(""); };
+  const format = (command: string, value?: string) => { editor.current?.focus(); document.execCommand(command, false, value); setHtmlBody(editor.current?.innerHTML ?? ""); setTextBody(editor.current?.innerText ?? ""); };
+  const addAttachments = async (files: FileList | null) => {
+    if (!files) return;
+    const incoming = await Promise.all(Array.from(files).map(async (file): Promise<OutgoingAttachment> => ({ name: file.name, mimeType: file.type || "application/octet-stream", size: file.size, dataBase64: await fileToBase64(file) })));
+    if ([...attachments, ...incoming].reduce((sum, item) => sum + item.size, 0) > 20 * 1024 * 1024) { setError("附件总大小不能超过 20 MB"); return; }
+    setAttachments((current) => [...current, ...incoming]);
+  };
+  const send = async () => {
+    setSending(true); setError("");
+    try { const message = await api.sendMail(payload()); localStorage.removeItem("mail-compose-draft"); onSent(message); }
+    catch (reason) { setError(String(reason)); }
+    finally { setSending(false); }
+  };
+  return <div className="overlay compose-overlay" onMouseDown={onClose}><section className="compose-modal" onMouseDown={(event) => event.stopPropagation()}>
+    <header className="compose-header"><button aria-label="关闭写信" onClick={onClose}><X/></button><div><h2>{initial.to ? "回复邮件" : "新建邮件"}</h2><span>{identity.displayName ? `${identity.displayName} · ` : ""}{identity.email}<ChevronDown size={13}/></span></div><button className="compose-send" disabled={sending || !to.trim() || !subject.trim() || !textBody.trim()} onClick={send}><Send size={16}/>{sending ? "发送中" : "发送"}</button></header>
+    <div className="compose-address"><label><span>收件人</span><input autoFocus value={to} onChange={(event) => setTo(event.target.value)} placeholder="输入邮箱；多个地址用逗号分隔"/><button type="button" onClick={() => setShowCopies((value) => !value)}>抄送/密送</button></label>
+      {showCopies && <div className="copy-fields"><label><span>抄送</span><input value={cc} onChange={(event) => setCc(event.target.value)} placeholder="抄送人邮箱"/></label><label><span>密送</span><input value={bcc} onChange={(event) => setBcc(event.target.value)} placeholder="密送人邮箱"/></label></div>}
+      <label><span>主题</span><input value={subject} onChange={(event) => setSubject(event.target.value)} placeholder="邮件主题"/></label>
+    </div>
+    <div ref={editor} className="compose-editor" contentEditable suppressContentEditableWarning data-placeholder="输入邮件正文…" onInput={(event) => { const target = event.currentTarget; setHtmlBody(target.innerHTML); setTextBody(target.innerText); }}/>
+    <div className="compose-signature"><span>北师港浸大 BNBU</span><strong>{identity.displayName || identity.email}</strong></div>
+    {attachments.length > 0 && <div className="attachment-list">{attachments.map((item, index) => <span key={`${item.name}-${index}`}><FileText size={14}/><strong>{item.name}</strong><em>{formatBytes(item.size)}</em><button onClick={() => setAttachments((current) => current.filter((_, itemIndex) => itemIndex !== index))}><X size={12}/></button></span>)}</div>}
+    {error && <div className="compose-error">{error}</div>}
+    <footer className="compose-toolbar"><label title="添加附件"><Paperclip/><input type="file" multiple onChange={(event) => void addAttachments(event.target.files)}/></label><button title="加粗" onClick={() => format("bold")}><Bold/></button><button title="斜体" onClick={() => format("italic")}><Italic/></button><button title="下划线" onClick={() => format("underline")}><Underline/></button><button title="项目符号" onClick={() => format("insertUnorderedList")}><List/></button><select aria-label="字体大小" defaultValue="3" onChange={(event) => format("fontSize", event.target.value)}><option value="2">小</option><option value="3">标准</option><option value="4">大</option><option value="5">特大</option></select><div className="emoji-wrap"><button title="表情" onClick={() => setShowEmoji((value) => !value)}><Smile/></button>{showEmoji && <div className="emoji-picker">{["🙂","😊","👍","🙏","🎉","✅","📚","⏰"].map((emoji) => <button key={emoji} onClick={() => { format("insertText", emoji); setShowEmoji(false); }}>{emoji}</button>)}</div>}</div><span className="toolbar-spacer"/><button title="保存草稿" onClick={saveDraft}><Save/></button><small>{formatBytes(attachments.reduce((sum, item) => sum + item.size, 0))} / 20 MB</small></footer>
+  </section></div>;
+}
+
+function ProfessorSearchModal({ onClose, onCompose, onToast }: { onClose: () => void; onCompose: (email: string) => void; onToast: (message: string) => void }) {
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<ProfessorContact[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [hasSearched, setHasSearched] = useState(false);
+  const [error, setError] = useState("");
+  const search = async () => { setSearching(true); setHasSearched(true); setError(""); try { setResults(await api.searchProfessors(query)); } catch (reason) { setError(String(reason)); setResults([]); } finally { setSearching(false); } };
+  return <div className="overlay" onMouseDown={onClose}><div className="modal professor-modal" onMouseDown={(event) => event.stopPropagation()}><button className="close" onClick={onClose}><X/></button><div className="reminder-icon"><AtSign/></div><div className="modal-kicker">BNBU 官方网站 · 全校师资名录</div><h2>查找教授邮箱</h2><p className="muted">输入姓名的一部分，例如姓氏、名字片段或英文拼写；所有可能匹配都会列出。</p><div className="professor-search"><Search size={17}/><input value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && query.trim()) void search(); }} placeholder="例如：周 / Zhou / xiaoyan"/><button disabled={searching || !query.trim()} onClick={search}>{searching ? "查找中…" : "搜索官网"}</button></div>{error && <div className="connection-result error-result">{error}</div>}<div className="professor-results">{!hasSearched && !error ? <div className="professor-empty"><Users size={30}/><span>输入部分姓名查找所有候选</span></div> : results.length === 0 && !searching && !error ? <div className="professor-empty"><Users size={30}/><span>没有找到匹配教师，请尝试另一段姓名</span></div> : results.map((contact) => <article key={`${contact.email}-${contact.sourceUrl}`}><div><strong>{contact.name}</strong><span>{contact.department}</span><code>{contact.email}</code></div><div><button title="复制邮箱" onClick={async () => { await navigator.clipboard.writeText(contact.email); onToast("教授邮箱已复制"); }}><Copy size={14}/></button><button title="写邮件" onClick={() => onCompose(contact.email)}><MailPlus size={14}/></button><a title="打开官网来源" href={contact.sourceUrl} target="_blank" rel="noreferrer"><ExternalLink size={14}/></a></div></article>)}</div><p className="official-note"><ShieldCheck size={14}/>搜索结果来自学校公开网页；发送前请核对姓名、职称与邮箱。</p></div></div>;
+}
+
+function escapeMailBody(value: string) { return value ? `<p>${value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll("\n", "<br>")}</p>` : ""; }
+function fileToBase64(file: File): Promise<string> { return new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result).split(",")[1] ?? ""); reader.onerror = () => reject(new Error(`无法读取附件 ${file.name}`)); reader.readAsDataURL(file); }); }
+function formatBytes(bytes: number) { if (bytes < 1024) return `${bytes} B`; if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`; return `${(bytes / 1024 / 1024).toFixed(1)} MB`; }
+function isLikelyEnglish(value: string) { const latin = (value.match(/[A-Za-z]/g) ?? []).length; const chinese = (value.match(/[\u3400-\u9fff]/g) ?? []).length; return latin >= 24 && latin > chinese * 2; }
+
+function CalendarBoard({ assignments, events, query, systemReminderSources, onImportSystem, onImportAcademic, onAdd, onEdit, onDelete }: { assignments: AssignmentDeadline[]; events: CalendarEvent[]; query: string; systemReminderSources: string[]; onImportSystem: (input: SystemReminderInput) => Promise<void>; onImportAcademic: () => void; onAdd: (value: PersonalReminderInput) => void; onEdit: (value: PersonalReminderInput) => void; onDelete: (id: string) => Promise<void> }) {
   const today = new Date();
   const [month, setMonth] = useState(() => new Date(today.getFullYear(), today.getMonth(), 1));
   const [selectedDay, setSelectedDay] = useState(() => localDateKey(today));
@@ -149,8 +257,8 @@ function CalendarBoard({ assignments, events, query, systemReminderSources, onIm
     onAdd({ title: "", notes: "", startsAt: date.toISOString(), priority: "normal" });
   };
   return <section className="calendar-board">
-    <div className="calendar-header"><div><div className="modal-kicker">邮件提醒 · iSpace · 个人安排</div><h1>统一日历</h1><p>所有时间均按本机时区显示；点击日期即可添加个人提醒。</p></div><div className="calendar-actions"><button className="secondary" onClick={() => { const now = new Date(); setMonth(new Date(now.getFullYear(), now.getMonth(), 1)); setSelectedDay(localDateKey(now)); }}>今天</button><button className="icon-button" aria-label="上个月" onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() - 1, 1))}><ChevronLeft size={17}/></button><strong>{month.toLocaleDateString("zh-CN", { year: "numeric", month: "long" })}</strong><button className="icon-button" aria-label="下个月" onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() + 1, 1))}><ChevronRight size={17}/></button><button className="primary add-calendar" onClick={() => createForDay(selectedDay)}><Plus size={15}/>添加提醒</button></div></div>
-    <div className="calendar-legend"><span><i className="ispace"/>iSpace DDL</span><span><i className="mail"/>邮件提醒</span><span><i className="personal"/>个人提醒</span><em>到时由电脑系统发出提醒</em></div>
+    <div className="calendar-header"><div><div className="modal-kicker">邮件提醒 · iSpace · BNBU 校历 · 个人安排</div><h1>统一日历</h1><p>学校校历按全天事件显示；点击日期可添加个人提醒。</p></div><div className="calendar-actions"><button className="secondary" onClick={onImportAcademic}><BookMarked size={15}/>导入校历</button><button className="secondary" onClick={() => { const now = new Date(); setMonth(new Date(now.getFullYear(), now.getMonth(), 1)); setSelectedDay(localDateKey(now)); }}>今天</button><button className="icon-button" aria-label="上个月" onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() - 1, 1))}><ChevronLeft size={17}/></button><strong>{month.toLocaleDateString("zh-CN", { year: "numeric", month: "long" })}</strong><button className="icon-button" aria-label="下个月" onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() + 1, 1))}><ChevronRight size={17}/></button><button className="primary add-calendar" onClick={() => createForDay(selectedDay)}><Plus size={15}/>添加提醒</button></div></div>
+    <div className="calendar-legend"><span><i className="ispace"/>iSpace DDL</span><span><i className="academic"/>BNBU 校历（全天）</span><span><i className="mail"/>邮件提醒</span><span><i className="personal"/>个人提醒</span><em>到时由电脑系统发出提醒</em></div>
     <div className="calendar-layout"><div className="month-calendar"><div className="weekday-row">{["周一","周二","周三","周四","周五","周六","周日"].map((day) => <span key={day}>{day}</span>)}</div><div className="calendar-grid">{grid.map((date) => { const key = localDateKey(date); const dayEvents = dated.filter((item) => localDateKey(item.startsAt!) === key); const currentMonth = date.getMonth() === month.getMonth(); const isToday = key === localDateKey(today); return <div key={key} className={`calendar-day ${currentMonth ? "" : "outside"} ${selectedDay === key ? "selected-day" : ""}`} onClick={() => setSelectedDay(key)}><div className="day-number"><span className={isToday ? "today" : ""}>{date.getDate()}</span><button aria-label={`在 ${key} 添加提醒`} onClick={(event) => { event.stopPropagation(); createForDay(key); }}><Plus size={12}/></button></div><div className="day-events">{dayEvents.slice(0, 3).map((item) => <button key={item.id} className={`calendar-chip ${item.kind} priority-${item.priority}`} title={item.title} onClick={(event) => { event.stopPropagation(); setSelectedDay(key); }}><time>{new Date(item.startsAt!).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}</time>{item.title}</button>)}{dayEvents.length > 3 && <span className="more-events">还有 {dayEvents.length - 3} 项</span>}</div></div>; })}</div></div>
       <aside className="day-agenda">
         <div className="agenda-heading"><div><span>{new Date(`${selectedDay}T12:00:00`).toLocaleDateString("zh-CN", { weekday: "long" })}</span><strong>{new Date(`${selectedDay}T12:00:00`).toLocaleDateString("zh-CN", { month: "long", day: "numeric" })}</strong></div><button onClick={() => createForDay(selectedDay)}><Plus size={14}/></button></div>
@@ -170,7 +278,23 @@ function CalendarBoard({ assignments, events, query, systemReminderSources, onIm
   </section>;
 }
 
-function eventKindLabel(kind: CalendarEvent["kind"]) { return kind === "ispace" ? "iSpace DDL" : kind === "mail" ? "邮件提醒" : "个人提醒"; }
+function eventKindLabel(kind: CalendarEvent["kind"]) { return kind === "ispace" ? "iSpace DDL" : kind === "academic" ? "BNBU 校历" : kind === "mail" ? "邮件提醒" : "个人提醒"; }
+
+function AcademicCalendarModal({ onClose, onSaved }: { onClose: () => void; onSaved: (count: number) => Promise<void> }) {
+  const [draft, setDraft] = useState(defaultAcademicCalendar);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  return <div className="overlay" onMouseDown={onClose}><div className="modal academic-calendar-modal" onMouseDown={(event) => event.stopPropagation()}>
+    <button className="close" onClick={onClose}><X/></button><div className="reminder-icon"><BookMarked/></div><div className="modal-kicker">BNBU 教务处 · 学期更新</div>
+    <h2>导入学期校历</h2><p className="muted">当前内容已按官方 2026–27 第一学期 PDF 填好。以后导入新学期时，修改学期名称、官方链接和事件清单即可；同名学期会被更新。</p>
+    <label>学期名称<input value={draft.semester} onChange={(event) => setDraft({ ...draft, semester: event.target.value })} placeholder="例如：2026-27 第二学期"/></label>
+    <label>BNBU 教务处官方 PDF 链接<input value={draft.sourceUrl} onChange={(event) => setDraft({ ...draft, sourceUrl: event.target.value })} placeholder="https://ar.bnbu.edu.cn/…pdf"/></label>
+    <label>校历事件<textarea rows={14} value={draft.entries} onChange={(event) => setDraft({ ...draft, entries: event.target.value })} placeholder="2027-02-22 | 第二学期开始&#10;2027-04-05~2027-04-09 | 阅读周"/></label>
+    <p className="secret-note">每行格式：开始日期~结束日期 | 事件名称。单日事件只写一个日期。</p>
+    {error && <div className="connection-result error-result">{error}</div>}
+    <div className="modal-actions"><button className="secondary" onClick={onClose}>取消</button><button className="primary" disabled={!draft.semester.trim() || !draft.sourceUrl.trim() || !draft.entries.trim() || saving} onClick={async () => { setSaving(true); setError(""); try { await onSaved(await api.importAcademicCalendar(draft)); } catch (reason) { setError(String(reason)); } finally { setSaving(false); } }}>{saving ? "正在导入…" : "导入这个学期"}</button></div>
+  </div></div>;
+}
 
 function PersonalReminderModal({ initial, onClose, onSaved }: { initial: PersonalReminderInput; onClose: () => void; onSaved: (saved: CalendarEvent, imported: boolean) => Promise<void> }) {
   const [draft, setDraft] = useState(initial);
@@ -216,10 +340,10 @@ function IspaceSettingsModal({ onClose, onToast, onSaved }: { onClose: () => voi
 }
 
 function SettingsModal({ onClose, onToast, onSaved }: { onClose: () => void; onToast: (v: string) => void; onSaved: () => Promise<void> }) {
-  const [settings, setSettings] = useState<MailSettings>(() => { try { return JSON.parse(localStorage.getItem("mail-settings") ?? "null") || defaultSettings; } catch { return defaultSettings; } });
+  const [settings, setSettings] = useState<MailSettings>(() => { try { return { ...defaultSettings, ...(JSON.parse(localStorage.getItem("mail-settings") ?? "null") || {}) }; } catch { return defaultSettings; } });
   const [password, setPassword] = useState(""); const [testing, setTesting] = useState(false); const [saving, setSaving] = useState(false); const [result, setResult] = useState("");
   const field = (key: keyof MailSettings, value: string) => setSettings((s) => ({ ...s, [key]: typeof s[key] === "number" ? Number(value) : value }));
-  return <div className="overlay" onMouseDown={onClose}><div className="modal settings-modal" onMouseDown={(e) => e.stopPropagation()}><button className="close" onClick={onClose}><X/></button><div className="modal-kicker">个人账号 · 无需管理员权限</div><h2>连接 BNBU 学生邮箱</h2><p className="muted">填写完整学生邮箱和邮箱密码；如邮箱提供客户端专用密码，请优先使用。凭据只保存在 macOS 钥匙串。</p><div className="form-grid"><label className="wide">学生邮箱<input value={settings.email} onChange={(e) => field("email", e.target.value)} placeholder="学号@mail.bnbu.edu.cn"/></label><label>IMAP 服务器<input value={settings.host} onChange={(e) => field("host", e.target.value)}/></label><label>端口<input type="number" value={settings.port} onChange={(e) => field("port", e.target.value)}/></label><label className="wide">邮箱密码 / 客户端专用密码<input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="不会写入数据库"/></label><div><strong>同步范围</strong><p className="muted">从本次启用之后的新邮件开始，不读取历史邮件</p></div><label>同步间隔（分钟）<input type="number" min="1" value={settings.syncMinutes} onChange={(e) => field("syncMinutes", e.target.value)}/></label></div>{result && <div className="connection-result">{result}</div>}<div className="modal-actions"><button className="secondary" disabled={testing || saving} onClick={async () => { setTesting(true); try { setResult(await api.testConnection(settings, password)); } catch(e) { setResult(String(e)); } finally { setTesting(false); } }}>{testing ? "测试中…" : "测试连接"}</button><button className="primary" disabled={!settings.email || !password || saving} onClick={async () => { setSaving(true); setResult("正在保存到 macOS 钥匙串并建立新邮件起点…"); try { await api.saveSettings({...settings, initialDays: 0}, password); localStorage.setItem("mail-settings", JSON.stringify({...settings, initialDays: 0})); onToast("已建立同步起点，等待新邮件"); onClose(); await onSaved(); } catch (e) { setResult(`保存失败：${String(e)}`); } finally { setSaving(false); } }}>{saving ? "正在保存…" : "保存并从现在开始"}</button></div></div></div>;
+  return <div className="overlay" onMouseDown={onClose}><div className="modal settings-modal" onMouseDown={(e) => e.stopPropagation()}><button className="close" onClick={onClose}><X/></button><div className="modal-kicker">个人账号 · 无需管理员权限</div><h2>连接 BNBU 学生邮箱</h2><p className="muted">填写完整学生邮箱和邮箱密码；如邮箱提供客户端专用密码，请优先使用。凭据只保存在 macOS 钥匙串。</p><div className="form-grid"><label className="wide">学生邮箱<input value={settings.email} onChange={(e) => field("email", e.target.value)} placeholder="学号@mail.bnbu.edu.cn"/></label><label className="wide">发件人显示名称（可选）<input value={settings.senderName} onChange={(e) => field("senderName", e.target.value)} placeholder="例如：你的英文姓名"/><small>留空时会从你已同步的本人邮件自动识别，确保手机企业微信显示一致。</small></label><label>IMAP 服务器<input value={settings.host} onChange={(e) => field("host", e.target.value)}/></label><label>端口<input type="number" value={settings.port} onChange={(e) => field("port", e.target.value)}/></label><label className="wide">邮箱密码 / 客户端专用密码<input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="不会写入数据库"/></label><div><strong>同步范围</strong><p className="muted">从本次启用之后的新邮件开始，不读取历史邮件</p></div><label>同步间隔（分钟）<input type="number" min="1" value={settings.syncMinutes} onChange={(e) => field("syncMinutes", e.target.value)}/></label></div>{result && <div className="connection-result">{result}</div>}<div className="modal-actions"><button className="secondary" disabled={testing || saving} onClick={async () => { setTesting(true); try { setResult(await api.testConnection(settings, password)); } catch(e) { setResult(String(e)); } finally { setTesting(false); } }}>{testing ? "测试中…" : "测试连接"}</button><button className="primary" disabled={!settings.email || !password || saving} onClick={async () => { setSaving(true); setResult("正在保存到 macOS 钥匙串并建立新邮件起点…"); try { await api.saveSettings({...settings, initialDays: 0}, password); localStorage.setItem("mail-settings", JSON.stringify({...settings, initialDays: 0})); onToast("已建立同步起点，等待新邮件"); onClose(); await onSaved(); } catch (e) { setResult(`保存失败：${String(e)}`); } finally { setSaving(false); } }}>{saving ? "正在保存…" : "保存并从现在开始"}</button></div></div></div>;
 }
 
 function ReminderModal({ draft: initial, onClose, onCreated }: { draft: ReminderDraft; onClose: () => void; onCreated: (id: string) => void }) {

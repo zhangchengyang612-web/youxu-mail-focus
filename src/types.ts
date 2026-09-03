@@ -1,4 +1,4 @@
-export const categories = ["待办", "学业", "校园事务", "社团活动", "个人", "外部"] as const;
+export const categories = ["待办", "学业", "校园事务", "社团活动", "实习", "个人", "外部"] as const;
 export type Category = (typeof categories)[number];
 
 export interface MailMessage {
@@ -40,8 +40,14 @@ export interface MailSettings {
   host: string;
   port: number;
   email: string;
+  senderName: string;
   initialDays: number;
   syncMinutes: number;
+}
+
+export interface MailIdentity {
+  email: string;
+  displayName: string;
 }
 
 export interface AssignmentDeadline {
@@ -54,7 +60,7 @@ export interface AssignmentDeadline {
   source: "iSpace";
 }
 
-export type CalendarEventKind = "ispace" | "mail" | "personal";
+export type CalendarEventKind = "ispace" | "mail" | "personal" | "academic";
 
 export interface CalendarEvent {
   id: string;
@@ -82,4 +88,34 @@ export interface SystemReminderInput {
   notes: string;
   dueAt: string;
   priority: "low" | "normal" | "high";
+}
+
+export interface AcademicCalendarImport {
+  semester: string;
+  sourceUrl: string;
+  entries: string;
+}
+
+export interface OutgoingAttachment {
+  name: string;
+  mimeType: string;
+  dataBase64: string;
+  size: number;
+}
+
+export interface OutgoingMail {
+  to: string[];
+  cc: string[];
+  bcc: string[];
+  subject: string;
+  textBody: string;
+  htmlBody: string;
+  attachments: OutgoingAttachment[];
+}
+
+export interface ProfessorContact {
+  name: string;
+  email: string;
+  department: string;
+  sourceUrl: string;
 }

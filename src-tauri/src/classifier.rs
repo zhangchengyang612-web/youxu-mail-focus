@@ -1,6 +1,7 @@
 use crate::models::{ClassificationRule, ParsedMail};
 
 const GROUPS: &[(&str, &[&str])] = &[
+    ("实习", &["实习", "实习生", "校招", "招聘", "简历", "internship", "intern position", "recruitment", "student assistant", "career opportunity", "job opening", "resume"]),
     ("待办", &["请处理", "请完成", "待办", "action required", "deadline", "截止", "due date", "务必"]),
     ("学业", &["课程", "作业", "考试", "成绩", "课堂", "选课", "论文", "导师", "assignment", "course", "exam", "quiz", "lecture"]),
     ("校园事务", &["教务", "校园", "宿舍", "图书馆", "注册", "缴费", "学生事务", "itsc", "校园卡", "系统通知"]),
@@ -31,5 +32,10 @@ mod tests {
     fn classifies_action_mail() {
         let mail = ParsedMail { uid: 1, sender_name: "A".into(), sender_email: "a@x.com".into(), recipients: vec![], subject: "请处理合同".into(), received_at: "".into(), body_text: "".into(), is_read: false };
         assert_eq!(classify(&mail, &[]).0, "待办");
+    }
+    #[test]
+    fn classifies_internship_before_generic_deadline() {
+        let mail = ParsedMail { uid: 2, sender_name: "Career".into(), sender_email: "career@example.com".into(), recipients: vec![], subject: "Summer internship application deadline".into(), received_at: "".into(), body_text: "Submit your resume by Friday".into(), is_read: false };
+        assert_eq!(classify(&mail, &[]).0, "实习");
     }
 }

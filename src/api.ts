@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { demoMails } from "./demo";
-import type { AssignmentDeadline, CalendarEvent, Category, ClassificationRule, MailMessage, MailSettings, PersonalReminderInput, ReminderDraft, SystemReminderInput } from "./types";
+import type { AcademicCalendarImport, AssignmentDeadline, CalendarEvent, Category, ClassificationRule, MailIdentity, MailMessage, MailSettings, OutgoingMail, PersonalReminderInput, ProfessorContact, ReminderDraft, SystemReminderInput } from "./types";
 
 const isTauri = () => "__TAURI_INTERNALS__" in window;
 
@@ -86,5 +86,43 @@ export const api = {
     if (!isTauri()) return [];
     await invoke("sync_assignments");
     return invoke("list_assignments");
+  },
+  async importAcademicCalendar(input: AcademicCalendarImport): Promise<number> {
+    if (isTauri()) return invoke("import_academic_calendar", { input });
+    const events = await this.listCalendarEvents();
+    const imported = parseAcademicEntries(input);
+    localStorage.setItem("calendar-events", JSON.stringify([...events.filter((item) => item.kind !== "academic" || item.sourceId !== input.semester.trim()), ...imported]));
+    return imported.length;
+  },
+  async sendMail(outgoing: OutgoingMail): Promise<string> {
+    if (!isTauri()) { await new Promise((resolve) => setTimeout(resolve, 700)); return "演示模式：邮件发送成功"; }
+    const payload = { ...outgoing, attachments: outgoing.attachments.map(({ size: _size, ...attachment }) => attachment) };
+    return invoke("send_mail", { outgoing: payload });
+  },
+  async getMailIdentity(): Promise<MailIdentity> {
+    if (!isTauri()) return { email: "student@example.edu", displayName: "Student Name" };
+    return invoke("get_mail_identity");
+  },
+  async translateMail(text: string): Promise<string> {
+    if (!isTauri()) { await new Promise((resolve) => setTimeout(resolve, 500)); return "这是英文邮件的中文翻译预览。"; }
+    return invoke("translate_mail", { text });
+  },
+  async searchProfessors(query: string): Promise<ProfessorContact[]> {
+    if (!isTauri()) return [{ name: "Prof. Weimin LIU", email: "weiminliu@bnbu.edu.cn", department: "BNBU 官网演示结果", sourceUrl: "https://www.bnbu.edu.cn/en/" }];
+    return invoke("search_professors", { query });
   }
 };
+
+function parseAcademicEntries(input: AcademicCalendarImport): CalendarEvent[] {
+  return input.entries.trim().split(/\r?\n/).flatMap((line, lineIndex) => {
+    const [range, title] = line.split("|").map((value) => value.trim());
+    if (!range || !title) throw new Error(`第 ${lineIndex + 1} 行格式错误`);
+    const [startText, endText = startText] = range.split("~").map((value) => value.trim());
+    const start = new Date(`${startText}T09:00:00+08:00`);
+    const end = new Date(`${endText}T09:00:00+08:00`);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end < start) throw new Error(`第 ${lineIndex + 1} 行日期无效`);
+    const output: CalendarEvent[] = [];
+    for (const date = new Date(start); date <= end; date.setDate(date.getDate() + 1)) output.push({ id: `academic:${input.semester}:${date.toISOString()}:${lineIndex}`, title, notes: input.semester, startsAt: date.toISOString(), priority: "normal", kind: "academic", sourceId: input.semester, sourceUrl: input.sourceUrl, readOnly: true });
+    return output;
+  });
+}
